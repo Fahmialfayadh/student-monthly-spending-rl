@@ -1,0 +1,245 @@
+environment:
+  episode_days: 30
+  steps_per_day: 5                      # 0: Pagi Awal, 1: Sesi 1, 2: Sesi 2, 3: Sesi 3, 4: Malam
+  total_steps: 150
+  start_day_of_week: 0                  # 0: Senin .. 6: Minggu
+  step_definitions:
+    0: {name: pagi_awal, hours: "06:00-09:30", climate: cool, ojol_tariff: normal, hunger_gain: 18.0}
+    1: {name: sesi_1,    hours: "09:30-12:15", climate: cool, ojol_tariff: peak,   hunger_gain: 18.0}
+    2: {name: sesi_2,    hours: "12:15-15:15", climate: midday, ojol_tariff: peak, hunger_gain: 22.0}
+    3: {name: sesi_3,    hours: "15:15-18:30", climate: cool, ojol_tariff: normal, hunger_gain: 20.0}
+    4: {name: malam,     hours: "18:30-22:30", climate: cool, ojol_tariff: normal, hunger_gain: 20.0}
+
+finance:
+  monthly_budget: 1500000
+  fixed_expenses:
+    mobile_data: 35000
+  # Satu saldo operasional tunggal (Rp 1.465.000): agen RL sendiri menentukan porsi transport vs makan vs kafe
+  initial_operational_budget: 1465000
+  alerts:
+    low_balance_threshold: 250000       # Penanda saldo operasional mulai menipis
+  late_month_impulsivity:
+    start_day: 22                       # Berlaku hari ke-22 s/d 30
+    weight: 0.80
+    craving_gain_multiplier: 1.80       # 1.0 + 0.80 pengali laju craving di akhir bulan
+
+pantry_and_cooking:
+  has_fridge: true
+  vegetable_preference: 0.0             # Fokus karbohidrat & protein (beras, telur, ayam, tempe)
+  utilities_and_water_idr: 0
+  initial_pantry:
+    rice: 0
+    egg: 0
+    chicken: 0
+    tempe: 0
+    meal_prep: 0
+  # Agen meracik sendiri komposisi porsi dari bahan-bahan di bawah ini (tanpa template menu tetap)
+  ingredients:
+    rice:
+      pack_price_idr: 48000             # 3 kg beras
+      units_per_pack: 20                # 150g / porsi (~Rp 2.400 / porsi)
+      shelf_life_steps: 150             # 30 hari (5 step/hari)
+      max_units_per_meal: 1
+      nutrition_per_unit: {hunger: -28.0, energy: 10.0, mood: 0.5}
+    egg:
+      pack_price_idr: 23500             # 1 kg telur
+      units_per_pack: 16                # 16 butir (~Rp 1.469 / butir)
+      shelf_life_steps: 75              # 15 hari di kulkas
+      max_units_per_meal: 2
+      nutrition_per_unit: {hunger: -12.0, energy: 5.0, mood: 2.0}
+    chicken:
+      pack_price_idr: 60000             # 1 kg ayam
+      units_per_pack: 10                # 10 potong (Rp 6.000 / potong)
+      shelf_life_steps: 35              # 7 hari di kulkas
+      max_units_per_meal: 2
+      nutrition_per_unit: {hunger: -22.0, energy: 9.0, mood: 5.5}
+    tempe:
+      pack_price_idr: 12000             # 2 papan tempe
+      units_per_pack: 12                # 6 potong/papan -> 12 potong (Rp 1.000 / potong)
+      shelf_life_steps: 25              # 5 hari di kulkas
+      max_units_per_meal: 2
+      nutrition_per_unit: {hunger: -10.0, energy: 4.0, mood: 1.5}
+  meal_composition_rules:
+    plain_rice_only_mood_penalty: -5.0  # Penalti jika makan nasi putih tanpa lauk sama sekali
+    multi_lauk_mood_bonus: 1.5          # Bonus mood jika mengombinasikan >= 2 jenis lauk berbeda
+    max_meal_hunger_reduction: 75.0     # Cap kekenyangan per 1 kali makan
+    max_meal_energy_gain: 28.0          # Cap pemulihan energi per 1 kali makan
+    reheat_mood_delta: -1.5             # Penyesuaian rasa makanan hasil reheat / bekal vs masak segar
+  grocery_shopping:
+    energy_cost: 15.0
+    mood_delta: -4.0                    # Hambatan psikologis keluar belanja
+    logistics_inertia_weight: 0.51
+    transport_cost_idr: 0               # Minimarket/pasar dekat apartemen
+  cooking_costs_and_gates:
+    meal_prep_batch_size: 5             # 1 sesi prep menghasilkan 5 porsi dengan komposisi pilihan agen
+    meal_prep_shelf_life_steps: 20      # 4 hari di kulkas (5 step/hari)
+    meal_prep_energy_cost: 38.0
+    meal_prep_min_energy: 55.0
+    meal_prep_min_mood: 55.0
+    cook_fresh_energy_cost: 22.0
+    cook_fresh_min_energy: 45.0
+    cook_fresh_min_mood: 50.0
+    # Masak pada step pagi_awal (06:00-09:30) jauh lebih menguras tenaga
+    morning_cook_fresh_extra_energy_cost: 18.0   # Total 40 energi di pagi hari
+    morning_cook_fresh_min_energy: 58.0
+    morning_meal_prep_extra_energy_cost: 22.0    # Total 60 energi di pagi hari
+    morning_meal_prep_min_energy: 72.0
+    reheat_prep_energy_cost: 10.0
+    reheat_prep_min_energy: 30.0
+    reheat_prep_min_mood: 45.0
+    # Sistem bawa bekal dari stok meal_prep ke kampus
+    max_packed_lunch_portions: 2
+    pack_bekal_energy_cost: 5.0
+    pack_bekal_min_energy: 20.0
+    pack_bekal_min_mood: 30.0
+    eat_bekal_energy_cost: 2.0
+  boredom_mechanics:
+    sensitivity: 0.70
+    # Signature menu dihitung dari kombinasi lauk (misal: egg+tempe, chicken, warung_hemat, warung_variasi)
+    consecutive_meal_mood_penalty: [0.0, -8.0, -15.0, -22.0]
+    apply_sensitivity_to_penalty: false
+
+biometrics_and_psychology:
+  state_bounds: [0.0, 100.0]
+  initial_state:
+    energy: 85.0
+    hunger: 20.0
+    mood: 75.0
+    academic_stress: 25.0
+    cafe_craving: 15.0
+  step_dynamics:
+    starvation_threshold: 75.0          # Di atas 75, Energy & Mood tergerus tiap step
+    starvation_energy_penalty_per_step: -10.0
+    starvation_mood_penalty_per_step: -8.0
+    skip_meal_tolerance: 0.80
+    skip_meal_mood_penalty: -4.0
+    skip_meal_energy_penalty: -12.0
+    # Tidur malam (22:30-06:00) terjadi otomatis setiap akhir hari; begadang hanya jika memilih night_cramming
+    sleep_normal_energy_gain: 55.0
+    sleep_normal_energy_cap: 95.0
+    sleep_normal_mood_gain: 12.0
+    sleep_cramming_energy_gain: 25.0
+    sleep_cramming_mood_delta: -8.0
+    rest_step_energy_gain: 18.0
+    rest_step_mood_gain: 5.0
+  external_food_recovery:
+    warung_hemat:          {hunger: -55.0, energy: 20.0, mood: 6.0,  cost_idr: 13000}
+    warung_variasi:        {hunger: -62.0, energy: 23.0, mood: 11.0, cost_idr: 18000}
+    craving_food_or_snack: {hunger: -40.0, energy: 15.0, mood: 18.0, cost_idr: 25000}
+  craving_and_cafe:
+    base_craving_gain_per_step: 6.5
+    stress_bonus_threshold: 60.0
+    stress_or_heat_craving_bonus: 4.5   # Tambahan jika academic_stress > 60 atau cuaca midday
+    distraction_threshold: 35.0
+    distraction_mood_penalty_per_step: -3.0
+    distraction_study_efficiency_multiplier: 0.60
+    cafe_session:
+      cost_min_idr: 25000
+      cost_max_idr: 50000
+      transport_from_apartment_idr: [12000, 18000]  # Ongkos PP ke kafe dari apartemen
+      transport_from_campus_idr: [8000, 12000]      # Ongkos lebih dekat dari area kampus
+      energy_cost: 6.0
+      hunger_delta: -15.0                           # Kopi + snack ringan di kafe
+      mood_gain: 28.0
+      stress_reduction: 25.0
+      craving_reset_to: 0.0
+      buff_duration_steps: 5
+      buff_craving_rate_multiplier: 0.50
+
+mobility_and_surabaya_climate:
+  heat_sensitivity: 0.95
+  heat_vs_cost_compromise: 0.30
+  routes:
+    direct_ojol:                        # Apartemen <-> Departemen Informatika
+      cost_normal_idr: [11000, 13000]
+      cost_peak_idr: [14000, 17000]
+      energy_cost: 3.0
+      mood_delta_cool: 0.0
+      mood_delta_midday: -2.0
+    transit_ccws_ojol:                  # Apartemen <-> CCWS + 1.5 km jalan kaki
+      cost_normal_idr: [7000, 8500]
+      cost_peak_idr: [8500, 10000]
+      energy_cost_cool: 8.0
+      energy_cost_midday: 20.0
+      mood_delta_cool: -2.0
+      mood_delta_midday: -16.0
+      minimarket_temptation_prob: 0.35
+  campus_hub_rules:
+    ccws_stay:
+      cost_idr: 0
+      energy_cost: 6.0
+      stress_reduction_per_step: 16.0
+      minimarket_temptation_prob: 0.55
+    minimarket_impulse_item:
+      spend_idr: [8000, 15000]
+      hunger_delta: -12.0
+      mood_delta: 4.0
+    wait_at_department_until_evening:
+      avoids_midday_heat: true
+      avoids_peak_ojol: true
+      energy_cost: 2.0
+      mood_delta_per_step: -10.0
+
+academics:
+  # Matriks jadwal kuliah mingguan per 5 step:
+  # [0: Pagi Awal (06:00), 1: Sesi 1 (09:40), 2: Sesi 2 (12:30), 3: Sesi 3 (15:30), 4: Malam (18:30)]
+  weekly_schedule:
+    monday:    [0, 0, 0, 1, 0]          # 15:30 Penambangan Data
+    tuesday:   [0, 1, 1, 1, 0]          # 09:40 PBO, 12:30 ML, 15:30 Keamanan Informasi (padat)
+    wednesday: [0, 1, 1, 0, 0]          # 09:40 Penambangan Data, 12:30 Kecerdasan Komputasional
+    thursday:  [0, 1, 0, 1, 0]          # 09:40 PAA, [jeda Sesi 2], 15:30 Kecerdasan Komputasional
+    friday:    [0, 0, 1, 0, 0]          # 12:30 Pembelajaran Mesin
+    saturday:  [0, 0, 0, 0, 0]          # Libur
+    sunday:    [0, 0, 0, 0, 0]          # Libur
+  daily_task_probability: 1.0
+  new_task_stress_gain: 14.0
+  room_study_max_stress_gate: 80.0
+  room_study_stress_reduction: 12.0
+  room_study_energy_cost: 10.0
+  night_cramming_stress_reduction: 24.0
+  night_cramming_energy_cost: 14.0
+  class_attendance_energy_cost: 10.0
+  absent_class_reward_penalty: -50.0
+  absent_class_stress_gain: 12.0
+
+action_space:
+  type: MultiDiscrete
+  dimensions:
+    meal_mode:    [skip, cook_fresh, meal_prep, reheat_or_eat_bekal, pack_bekal, warung_hemat, warung_variasi, craving_snack] # 8
+    cook_rice:    [0, 1]                # Jumlah porsi beras per makan / per porsi prep (2)
+    cook_egg:     [0, 1, 2]             # Jumlah butir telur (3)
+    cook_chicken: [0, 1, 2]             # Jumlah potong ayam (3)
+    cook_tempe:   [0, 1, 2]             # Jumlah potong tempe (3)
+    mobility:     [stay, direct_ojol, transit_ccws_ojol]                               # 3
+    activity:     [rest_or_sleep, attend_class, room_study, ccws_stay, cafe_session, wait_at_department, grocery_shop, night_cramming] # 8
+    buy_rice:     [0, 1]                # Beli 1 pack 3kg saat grocery_shop (2)
+    buy_egg:      [0, 1]                # Beli 1 pack 1kg saat grocery_shop (2)
+    buy_chicken:  [0, 1]                # Beli 1 pack 1kg saat grocery_shop (2)
+    buy_tempe:    [0, 1]                # Beli 1 pack 2 papan saat grocery_shop (2)
+
+termination:
+  mode: hybrid
+  fatal_energy_threshold: 0.0           # energy <= 0 -> Game Over (pingsan/kolaps)
+  fatal_hunger_threshold: 100.0
+  fatal_hunger_consecutive_steps: 2     # hunger >= 100 selama 2 step berturut-turut -> Game Over
+  burnout_mood_threshold: 0.0           # Soft constraint: penalti berat & memaksa istirahat
+  burnout_stress_threshold: 100.0       # Soft constraint: penalti berat & mengunci aktivitas berat
+  fatal_termination_penalty: -200.0
+
+rewards:
+  step_survival_bonus: 1.0
+  wellbeing_weights:
+    energy_weight: 0.02                 # Skala state 0..100
+    mood_weight: 0.03
+    hunger_penalty_weight: -0.025
+    stress_penalty_weight: -0.035
+  critical_state_penalties:
+    starvation_per_step: -6.0
+    burnout_mood_per_step: -10.0
+    burnout_stress_per_step: -10.0
+    food_spoilage_per_unit: -1.5        # Penalti tiap unit bahan/meal prep/bekal basi
+    emergency_return_penalty: -10.0
+  class_attendance_bonus: 5.0
+  terminal_episode_completion:
+    survived_30_days_bonus: 100.0
+    remaining_balance_reward_per_100k: 10.0
