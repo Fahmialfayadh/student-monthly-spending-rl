@@ -134,6 +134,11 @@ class PeriodicEvalCallback(BaseCallback):
             + eval_summary["mean_reheat_prep_count"]
             + eval_summary["mean_eat_bekal_count"]
         )
+        hub_or_leisure = eval_summary.get(
+            "mean_hub_or_leisure_count",
+            eval_summary.get("mean_ccws_stay_count", 0.0)
+            + eval_summary.get("mean_cafe_session_count", 0.0),
+        )
         best_tag = " [BEST]" if is_new_best else ""
         print(
             f"Step {timesteps_completed:>7d}/{self.total_timesteps} | "
@@ -144,7 +149,7 @@ class PeriodicEvalCallback(BaseCallback):
             f"Kelas: {eval_summary['mean_class_attendance_rate'] * 100:>5.1f}% | "
             f"Sisa: Rp {eval_summary['mean_final_balance_idr']:>9,.0f} | "
             f"Masak/Bekal: {home_meals:>4.1f} | "
-            f"CCWS/Kafe: {eval_summary['mean_ccws_stay_count'] + eval_summary['mean_cafe_session_count']:>4.1f}"
+            f"Hub/Leisure: {hub_or_leisure:>4.1f}"
             f"{best_tag}"
         )
         pd.DataFrame(self.eval_history_rows).to_csv(

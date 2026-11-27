@@ -16,17 +16,19 @@ def format_step_events_summary(step_events: dict[str, Any]) -> str:
         event_tags.append("new_daily_task")
     if step_events.get("forced_rest_due_to_mood_burnout"):
         event_tags.append("forced_rest_mood_burnout")
-    if step_events.get("campus_activity_cancelled_insufficient_funds"):
-        event_tags.append("campus_cancelled_low_balance")
+    if step_events.get("campus_activity_cancelled_insufficient_funds") or step_events.get(
+        "activity_cancelled_insufficient_funds"
+    ):
+        event_tags.append("activity_cancelled_low_balance")
     if step_events.get("transit_minimarket_impulse"):
         event_tags.append("transit_minimarket_impulse")
-    if step_events.get("ccws_minimarket_impulse"):
-        event_tags.append("ccws_minimarket_impulse")
+    if step_events.get("ccws_minimarket_impulse") or step_events.get("node_minimarket_impulse"):
+        event_tags.append("node_minimarket_impulse")
     if "cafe_spend_idr" in step_events:
         cafe_total = int(step_events["cafe_spend_idr"]) + int(
             step_events.get("cafe_transport_idr", 0)
         )
-        event_tags.append(f"cafe_total_Rp{cafe_total:,}")
+        event_tags.append(f"leisure_total_Rp{cafe_total:,}")
     if step_events.get("purchased_groceries"):
         items = ",".join(str(item) for item in step_events["purchased_groceries"])
         event_tags.append(f"bought({items})")
@@ -37,8 +39,8 @@ def format_step_events_summary(step_events: dict[str, Any]) -> str:
         event_tags.append("ate_fresh_prep")
     if step_events.get("packed_bekal_signature"):
         event_tags.append(f"packed_bekal({step_events['packed_bekal_signature']})")
-    if step_events.get("ate_bekal_at_campus"):
-        event_tags.append("ate_bekal_campus")
+    if step_events.get("ate_bekal_outside") or step_events.get("ate_bekal_at_campus"):
+        event_tags.append("ate_bekal_outside")
     if step_events.get("morning_heavy_cooking"):
         event_tags.append("morning_heavy_cooking")
     boredom_penalty = float(step_events.get("boredom_mood_penalty", 0.0))
@@ -164,25 +166,24 @@ class StudentEvaluator:
             stress_history: list[float] = []
             craving_history: list[float] = []
 
-            meal_counts = {
+            external_food_ids = tuple(base_env.external_food_ids)
+            edge_ids = [edge.id for edge in base_env.world_config.world_graph.edges]
+            meal_counts: dict[str, int] = {
                 "skip": 0,
                 "cook_fresh": 0,
                 "meal_prep": 0,
                 "reheat_prep": 0,
                 "eat_bekal": 0,
-                "apartemen_warung": 0,
-                "delivery_food": 0,
-                "warung_hemat": 0,
-                "warung_variasi": 0,
+                **{fid: 0 for fid in external_food_ids},
             }
             pack_bekal_count = 0
             activity_counts = {name: 0 for name in base_env.activity_names}
-            route_counts = {
+            route_counts: dict[str, int] = {
                 "stay": 0,
-                "direct_ojol": 0,
-                "transit_ccws_ojol": 0,
                 "emergency_return": 0,
             }
+            edge_counts: dict[str, int] = {eid: 0 for eid in edge_ids}
+            total_travel_distance_km = 0.0
 
             starvation_steps = 0
             mood_burnout_steps = 0
@@ -192,7 +193,7 @@ class StudentEvaluator:
 
             while not episode_done:
                 step_before = base_env.current_step
-                location_before = base_env.current_location
+                location_before = base_env.current_node_id
                 balance_before = float(base_env.balance_idr)
                 raining_before = bool(base_env.current_is_raining)
 
@@ -249,7 +250,7 @@ class StudentEvaluator:
                 craving_history.append(current_craving)
 
                 executed_meal = str(step_events.get("executed_meal_mode", "skip"))
-                executed_activity = str(step_events.get("executed_activity", "rest_or_sleep"))
+                executed_activity = str(step_events.get("executed_activity", base_env.activity_names[0]))
                 executed_route = str(step_events.get("executed_route", "stay"))
 
                 if executed_meal in meal_counts:
@@ -258,8 +259,10 @@ class StudentEvaluator:
                     pack_bekal_count += 1
                 if executed_activity in activity_counts:
                     activity_counts[executed_activity] += 1
-                if executed_route in route_counts:
-                    route_counts[executed_route] += 1
+                route_counts[executed_route] = route_counts.get(executed_route, 0) + 1
+                for eid in step_events.get("traversed_edges", []):
+                    edge_counts[eid] = edge_counts.get(eid, 0) + 1
+                total_travel_distance_km += float(step_events.get("travel_distance_km", 0.0))
 
                 if step_events.get("starvation_active"):
                     starvation_steps += 1
@@ -269,8 +272,10 @@ class StudentEvaluator:
                     stress_burnout_steps += 1
                 if step_events.get("night_cramming"):
                     night_cramming_count += 1
-                if step_events.get("transit_minimarket_impulse") or step_events.get(
-                    "ccws_minimarket_impulse"
+                if (
+                    step_events.get("transit_minimarket_impulse")
+                    or step_events.get("ccws_minimarket_impulse")
+                    or step_events.get("node_minimarket_impulse")
                 ):
                     minimarket_impulse_count += 1
 
@@ -340,7 +345,17 @@ class StudentEvaluator:
             )
             spending = terminal_info.get("spending_by_category_idr", {})
 
-            episode_records.append({
+            hub_or_leisure_count = sum(
+                activity_counts.get(aid, 0)
+                for aid, spec in base_env.activity_specs.items()
+                if spec.handler in ("hub_stay", "leisure_reset")
+            )
+            grocery_shop_count = sum(
+                activity_counts.get(aid, 0)
+                for aid, spec in base_env.activity_specs.items()
+                if spec.handler == "grocery_shop"
+            )
+            episode_row: dict[str, Any] = {
                 "episode_index": episode_index,
                 "episode_seed": episode_seed,
                 "episode_reward": cumulative_reward,
@@ -373,20 +388,19 @@ class StudentEvaluator:
                 "reheat_prep_count": meal_counts["reheat_prep"],
                 "pack_bekal_count": pack_bekal_count,
                 "eat_bekal_count": meal_counts["eat_bekal"],
-                "apartemen_warung_count": meal_counts["apartemen_warung"],
-                "delivery_food_count": meal_counts["delivery_food"],
-                "warung_hemat_count": meal_counts["warung_hemat"],
-                "warung_variasi_count": meal_counts["warung_variasi"],
                 "skip_meal_count": meal_counts["skip"],
-                "grocery_shop_count": activity_counts.get("grocery_shop", 0),
-                "room_study_count": activity_counts.get("room_study", 0),
-                "ccws_stay_count": activity_counts.get("ccws_stay", 0),
-                "cafe_session_count": activity_counts.get("cafe_session", 0),
-                "wait_at_department_count": activity_counts.get("wait_at_department", 0),
-                "direct_ojol_count": route_counts.get("direct_ojol", 0),
-                "transit_ccws_ojol_count": route_counts.get("transit_ccws_ojol", 0),
+                "grocery_shop_count": grocery_shop_count,
+                "hub_or_leisure_count": hub_or_leisure_count,
+                "travel_distance_km": total_travel_distance_km,
                 "emergency_return_count": route_counts.get("emergency_return", 0),
-            })
+            }
+            for fid in external_food_ids:
+                episode_row[f"{fid}_count"] = meal_counts.get(fid, 0)
+            for aid in base_env.activity_names:
+                episode_row[f"{aid}_count"] = activity_counts.get(aid, 0)
+            for eid in edge_ids:
+                episode_row[f"edge_{eid}_count"] = edge_counts.get(eid, 0)
+            episode_records.append(episode_row)
 
         evaluation_env.close()
 
@@ -402,7 +416,7 @@ class StudentEvaluator:
     @staticmethod
     def _aggregate_episode_metrics(episodes_dataframe: pd.DataFrame) -> dict[str, float]:
         best_row = episodes_dataframe.loc[episodes_dataframe["episode_reward"].idxmax()]
-        return {
+        summary: dict[str, float] = {
             "mean_episode_reward": float(episodes_dataframe["episode_reward"].mean()),
             "std_episode_reward": float(episodes_dataframe["episode_reward"].std(ddof=0)),
             "min_episode_reward": float(episodes_dataframe["episode_reward"].min()),
@@ -436,20 +450,18 @@ class StudentEvaluator:
             "mean_reheat_prep_count": float(episodes_dataframe["reheat_prep_count"].mean()),
             "mean_pack_bekal_count": float(episodes_dataframe["pack_bekal_count"].mean()),
             "mean_eat_bekal_count": float(episodes_dataframe["eat_bekal_count"].mean()),
-            "mean_apartemen_warung_count": float(
-                episodes_dataframe["apartemen_warung_count"].mean()
-            ),
-            "mean_delivery_food_count": float(episodes_dataframe["delivery_food_count"].mean()),
-            "mean_warung_hemat_count": float(episodes_dataframe["warung_hemat_count"].mean()),
-            "mean_warung_variasi_count": float(episodes_dataframe["warung_variasi_count"].mean()),
-            "mean_ccws_stay_count": float(episodes_dataframe["ccws_stay_count"].mean()),
-            "mean_cafe_session_count": float(episodes_dataframe["cafe_session_count"].mean()),
             "mean_night_cramming_count": float(episodes_dataframe["night_cramming_count"].mean()),
-            "mean_direct_ojol_count": float(episodes_dataframe["direct_ojol_count"].mean()),
-            "mean_transit_ccws_ojol_count": float(
-                episodes_dataframe["transit_ccws_ojol_count"].mean()
-            ),
+            "mean_hub_or_leisure_count": float(episodes_dataframe["hub_or_leisure_count"].mean()),
+            "mean_travel_distance_km": float(episodes_dataframe["travel_distance_km"].mean()),
         }
+        dynamic_count_cols = [
+            col
+            for col in episodes_dataframe.columns
+            if col.endswith("_count") and f"mean_{col}" not in summary
+        ]
+        for col in dynamic_count_cols:
+            summary[f"mean_{col}"] = float(episodes_dataframe[col].mean())
+        return summary
 
     def evaluate(
         self,

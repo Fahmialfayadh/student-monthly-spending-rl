@@ -12,16 +12,14 @@ __all__ = [
     "default_balanced_expert_policy",
 ]
 
-# Offset mask untuk 6 head terpadu:
-# activity(8) + route(2) + meal_mode(6) + cook_combo(18) + bring_bekal(2) + grocery_bundle(15)
-_MASK_OFFSETS = {
-    "activity": 0,
-    "route": 8,
-    "meal_mode": 10,
-    "cook_combo": 16,
-    "bring_bekal": 34,
-    "grocery_bundle": 36,
-}
+_HEAD_ORDER = (
+    "activity",
+    "route",
+    "meal_mode",
+    "cook_combo",
+    "bring_bekal",
+    "grocery_bundle",
+)
 
 _PREFERRED_COMBOS = (
     PantryManager.COOK_COMBOS.index((1, 1, 0, 1)),  # 1 rice + 1 egg + 1 tempe
@@ -35,30 +33,59 @@ _PREFERRED_COMBOS = (
 )
 
 
-def _is_allowed(mask: np.ndarray, head: str, index: int) -> bool:
-    return bool(mask[_MASK_OFFSETS[head] + index])
+def _compute_mask_offsets(env: StudentLifeEnv) -> dict[str, int]:
+    offsets: dict[str, int] = {}
+    cursor = 0
+    for head_name, dim_len in zip(_HEAD_ORDER, env.action_space.nvec):
+        offsets[head_name] = cursor
+        cursor += int(dim_len)
+    return offsets
 
 
-def _first_valid(mask: np.ndarray, head: str, size: int) -> int:
+def _is_allowed(
+    mask: np.ndarray, offsets: dict[str, int], head: str, index: int | None
+) -> bool:
+    if index is None or index < 0:
+        return False
+    return bool(mask[offsets[head] + index])
+
+
+def _first_valid(mask: np.ndarray, offsets: dict[str, int], head: str, size: int) -> int:
+    start = offsets[head]
     for idx in range(size):
-        if _is_allowed(mask, head, idx):
+        if bool(mask[start + idx]):
             return idx
     raise RuntimeError(f"All-False action mask pada head '{head}'.")
 
 
+def _find_activity_index(env: StudentLifeEnv, handler: str) -> int | None:
+    for idx, aid in enumerate(env.activity_names):
+        if env.activity_specs[aid].handler == handler:
+            return idx
+    return None
+
+
 def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
     """
-    Demonstrator heuristik seimbang untuk warm-start Behavior Cloning:
-    - Belanja bahan dapur terukur (menghindari penimbunan/basi)
-    - Masak segar, meal prep, & bawa bekal saat ke kampus dengan rotasi lauk
-    - Kuliah ~100%, produktif di CCWS, dan ngafe berkala saat craving tinggi
+    Demonstrator heuristik seimbang berbasis WorldGraph & handler aktivitas untuk
+    warm-start Behavior Cloning pada topologi graf mana pun.
     """
     mask = env.action_masks()
+    offsets = _compute_mask_offsets(env)
     _, _, step_in_day, day_name = env.academics.get_time_context(env.current_step)
     is_night = step_in_day == (env.steps_per_day - 1)
     class_now = env.academics.is_class_scheduled(day_name, step_in_day)
-    at_campus = env.current_location == "campus"
+    at_home = env.current_node_id == env.home_node_id
+    at_outside = not at_home
     days_left = (env.total_steps - env.current_step) / env.steps_per_day
+
+    act_rest = _find_activity_index(env, "rest") or 0
+    act_attend = _find_activity_index(env, "attend_schedule")
+    act_grocery = _find_activity_index(env, "grocery_shop")
+    act_leisure = _find_activity_index(env, "leisure_reset")
+    act_hub = _find_activity_index(env, "hub_stay")
+    act_study = _find_activity_index(env, "study")
+    act_wait = _find_activity_index(env, "wait")
 
     rice = env.pantry.get_ingredient_total_units("rice")
     egg = env.pantry.get_ingredient_total_units("egg")
@@ -73,63 +100,86 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
     need_tempe = 1 if (tempe == 0 and chicken <= 2 and days_left >= 5.0) else 0
     desired_bundle_tuple = (need_rice, need_egg, need_chicken, need_tempe)
 
-    grocery_bundle = _first_valid(mask, "grocery_bundle", len(PantryManager.GROCERY_BUNDLES))
+    grocery_bundle = _first_valid(
+        mask, offsets, "grocery_bundle", len(PantryManager.GROCERY_BUNDLES)
+    )
     wants_grocery = False
     if any(desired_bundle_tuple):
         candidate_idx = PantryManager.GROCERY_BUNDLES.index(desired_bundle_tuple)
-        if _is_allowed(mask, "grocery_bundle", candidate_idx):
+        if _is_allowed(mask, offsets, "grocery_bundle", candidate_idx):
             grocery_bundle = candidate_idx
             wants_grocery = True
-        elif need_rice and _is_allowed(
-            mask, "grocery_bundle", PantryManager.GROCERY_BUNDLES.index((1, 0, 0, 0))
-        ):
-            grocery_bundle = PantryManager.GROCERY_BUNDLES.index((1, 0, 0, 0))
-            wants_grocery = True
+        else:
+            rice_only_idx = PantryManager.GROCERY_BUNDLES.index((1, 0, 0, 0))
+            if need_rice and _is_allowed(mask, offsets, "grocery_bundle", rice_only_idx):
+                grocery_bundle = rice_only_idx
+                wants_grocery = True
 
-    # 2. Pilih aktivitas utama
-    activity = 0  # rest_or_sleep
-    if class_now and _is_allowed(mask, "activity", 1):
-        activity = 1  # attend_class
-    elif (not at_campus) and (not is_night) and wants_grocery and _is_allowed(mask, "activity", 6):
-        activity = 6  # grocery_shop
-    elif env.cafe_craving > 46.0 and env.balance_idr > 180_000.0 and _is_allowed(mask, "activity", 4):
-        activity = 4  # cafe_session (~4-6x/bulan)
+    # 2. Pilih aktivitas utama berdasarkan handler & kemampuan graf
+    activity = act_rest
+    if class_now and _is_allowed(mask, offsets, "activity", act_attend):
+        activity = int(act_attend)
+    elif (
+        at_home
+        and (not is_night)
+        and wants_grocery
+        and _is_allowed(mask, offsets, "activity", act_grocery)
+    ):
+        activity = int(act_grocery)
+    elif (
+        env.cafe_craving > 46.0
+        and env.balance_idr > 180_000.0
+        and _is_allowed(mask, offsets, "activity", act_leisure)
+    ):
+        activity = int(act_leisure)
     elif (
         (not is_night)
-        and env.biometrics.ccws_visits_today == 0
+        and env.biometrics.hub_visits_today == 0
         and (
-            (at_campus and (env.academic_stress > 12.0 or env.cafe_craving > 34.0))
-            or ((not at_campus) and (env.academic_stress > 28.0 or env.cafe_craving > 38.0))
+            (at_outside and (env.academic_stress > 12.0 or env.cafe_craving > 34.0))
+            or (at_home and (env.academic_stress > 28.0 or env.cafe_craving > 38.0))
         )
-        and _is_allowed(mask, "activity", 3)
+        and _is_allowed(mask, offsets, "activity", act_hub)
     ):
-        activity = 3  # ccws_stay
+        activity = int(act_hub)
     elif (
-        at_campus
+        at_outside
         and (not is_night)
         and env.academics.has_later_class_today(day_name, step_in_day)
     ):
-        activity = 3 if _is_allowed(mask, "activity", 3) else 5
-    elif (not at_campus) and (not is_night) and env.academic_stress > 18.0 and _is_allowed(mask, "activity", 2):
-        activity = 2  # room_study
+        if _is_allowed(mask, offsets, "activity", act_hub):
+            activity = int(act_hub)
+        elif _is_allowed(mask, offsets, "activity", act_study):
+            activity = int(act_study)
+        elif _is_allowed(mask, offsets, "activity", act_wait):
+            activity = int(act_wait)
+    elif at_home and (not is_night) and env.academic_stress > 18.0 and _is_allowed(mask, offsets, "activity", act_study):
+        activity = int(act_study)
 
-    if not _is_allowed(mask, "activity", activity):
-        activity = _first_valid(mask, "activity", len(env.activity_names))
+    if not _is_allowed(mask, offsets, "activity", activity):
+        activity = _first_valid(mask, offsets, "activity", len(env.activity_names))
 
-    # 3. Pilih rute ojol: hemat lewat transit CCWS kecuali hujan atau panas terik saat lelah
-    prefer_direct = env.current_is_raining or (step_in_day == 2 and env.energy < 45.0)
-    route = (
-        0
-        if (prefer_direct and _is_allowed(mask, "route", 0))
-        else (1 if _is_allowed(mask, "route", 1) else 0)
-    )
+    # 3. Pilih preferensi rute: hemat (cheapest) kecuali hujan atau panas terik saat lelah
+    fastest_idx = env.route_names.index("fastest") if "fastest" in env.route_names else 0
+    cheapest_idx = env.route_names.index("cheapest") if "cheapest" in env.route_names else 0
+    prefer_fastest = env.current_is_raining or (step_in_day == 2 and env.energy < 45.0)
+    if prefer_fastest and _is_allowed(mask, offsets, "route", fastest_idx):
+        route = fastest_idx
+    elif _is_allowed(mask, offsets, "route", cheapest_idx):
+        route = cheapest_idx
+    else:
+        route = _first_valid(mask, offsets, "route", len(env.route_names))
 
-    # 4. Bawa bekal ringan jika berangkat ke kampus dan ada stok meal_prep
-    bring_bekal = 1 if (_is_allowed(mask, "bring_bekal", 1) and activity in (1, 3)) else 0
+    # 4. Bawa bekal ringan jika beraktivitas ke luar rumah dan ada stok meal_prep
+    chosen_handler = env.activity_specs[env.activity_names[activity]].handler
+    leaving_for_campus_or_hub = chosen_handler in ("attend_schedule", "hub_stay")
+    bring_bekal = 1 if (_is_allowed(mask, offsets, "bring_bekal", 1) and leaving_for_campus_or_hub) else 0
 
     # 5. Pilih komposisi masak (prioritaskan variasi anti-boredom & bahan cepat basi)
-    cook_combo = _first_valid(mask, "cook_combo", len(PantryManager.COOK_COMBOS))
-    valid_combos = [idx for idx in _PREFERRED_COMBOS if _is_allowed(mask, "cook_combo", idx)]
+    cook_combo = _first_valid(mask, offsets, "cook_combo", len(PantryManager.COOK_COMBOS))
+    valid_combos = [
+        idx for idx in _PREFERRED_COMBOS if _is_allowed(mask, offsets, "cook_combo", idx)
+    ]
     if valid_combos:
         tempe_life = env.pantry.get_min_ingredient_shelf_life("tempe") or 999
         chicken_life = env.pantry.get_min_ingredient_shelf_life("chicken") or 999
@@ -138,7 +188,6 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
             qty = PantryManager.decode_cook_combo(combo_idx)
             _, _, _, sig = env.pantry.calculate_custom_meal_profile(qty)
             repeats = env.pantry.get_recent_meal_count(sig)
-            # Utamakan bahan yang mendekati basi (tempe/ayam <= 10 step)
             urgency_bonus = 0
             if qty["tempe"] > 0 and tempe_life <= 10:
                 urgency_bonus -= 2
@@ -151,13 +200,14 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
         cook_combo = valid_combos[0]
 
     # 6. Pilih meal_mode (meal_prep saat stok prep kosong, masak segar / bekal saat lapar)
+    current_has_kitchen = env.world_graph.get_node(env.current_node_id).has_kitchen
     meal_mode = 0
     if (
-        (not at_campus or is_night)
+        (at_home or current_has_kitchen or is_night)
         and prep == 0
         and days_left >= 3.0
         and env.energy >= 52.0
-        and _is_allowed(mask, "meal_mode", 2)
+        and _is_allowed(mask, offsets, "meal_mode", 2)
     ):
         prep_candidates = [
             idx
@@ -166,20 +216,20 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
         ]
         if prep_candidates:
             cook_combo = prep_candidates[0]
-            meal_mode = 2  # meal_prep (langsung makan 1 porsi segar bila lapar + simpan sisanya)
+            meal_mode = 2
     elif env.hunger >= 40.0:
-        if _is_allowed(mask, "meal_mode", 3) and (
-            at_campus or env.pantry.has_non_repeating_meal_prep()
+        if _is_allowed(mask, offsets, "meal_mode", 3) and (
+            at_outside or env.pantry.has_non_repeating_meal_prep()
         ):
-            meal_mode = 3  # reheat_or_eat_bekal
-        elif (not at_campus or is_night) and _is_allowed(mask, "meal_mode", 1):
-            meal_mode = 1  # cook_fresh
-        elif _is_allowed(mask, "meal_mode", 3):
-            meal_mode = 3  # reheat_or_eat_bekal fallback
-        elif _is_allowed(mask, "meal_mode", 4):
-            meal_mode = 4  # budget_external_meal
-        elif _is_allowed(mask, "meal_mode", 5):
-            meal_mode = 5  # varied_external_meal
+            meal_mode = 3
+        elif (at_home or current_has_kitchen or is_night) and _is_allowed(mask, offsets, "meal_mode", 1):
+            meal_mode = 1
+        elif _is_allowed(mask, offsets, "meal_mode", 3):
+            meal_mode = 3
+        elif _is_allowed(mask, offsets, "meal_mode", 4):
+            meal_mode = 4
+        elif _is_allowed(mask, offsets, "meal_mode", 5):
+            meal_mode = 5
 
     return np.asarray(
         [activity, route, meal_mode, cook_combo, bring_bekal, grocery_bundle],
