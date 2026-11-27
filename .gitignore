@@ -236,3 +236,6 @@ __marimo__/
 
 # Experiment / training run outputs (logs, traces, eval summaries, checkpoints)
 runs/
+
+# Temporary AI helper scripts / debug output
+scripts/tmp/
