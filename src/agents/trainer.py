@@ -62,6 +62,9 @@ class PeriodicEvalCallback(BaseCallback):
         best_timestep: int,
         survival_achieved: bool,
         milestone_announced: bool,
+        stop_event: Any = None,
+        progress_callback: Any = None,
+        log_callback: Any = None,
     ):
         super().__init__(verbose=0)
         self.agent = agent
@@ -80,7 +83,15 @@ class PeriodicEvalCallback(BaseCallback):
         self.best_timestep = int(best_timestep)
         self.survival_achieved = bool(survival_achieved)
         self.milestone_announced = bool(milestone_announced)
+        self.stop_event = stop_event
+        self.progress_callback = progress_callback
+        self.log_callback = log_callback
         self.next_eval_step = 0
+
+    def _emit_log(self, message: str) -> None:
+        print(message)
+        if self.log_callback is not None:
+            self.log_callback(message)
 
     def _on_training_start(self) -> None:
         if not self.eval_history_rows:
@@ -99,7 +110,7 @@ class PeriodicEvalCallback(BaseCallback):
             self.survival_achieved = True
             if self.lr_state["decay_start"] is None:
                 self.lr_state["decay_start"] = timesteps_completed
-                print(
+                self._emit_log(
                     f"Survival achieved at {timesteps_completed:,} steps; LR now starts decaying."
                 )
 
@@ -122,7 +133,7 @@ class PeriodicEvalCallback(BaseCallback):
 
         if timesteps_completed >= self.survival_phase_timesteps and not self.milestone_announced:
             status = "entering optimization" if self.survival_achieved else "still in survival phase"
-            print(
+            self._emit_log(
                 f"Milestone {self.survival_phase_timesteps:,} steps reached; "
                 f"completion={eval_summary['completion_rate'] * 100:.0f}% ({status})."
             )
@@ -136,11 +147,10 @@ class PeriodicEvalCallback(BaseCallback):
         )
         hub_or_leisure = eval_summary.get(
             "mean_hub_or_leisure_count",
-            eval_summary.get("mean_ccws_stay_count", 0.0)
-            + eval_summary.get("mean_cafe_session_count", 0.0),
+            eval_summary.get("mean_cafe_session_count", 0.0),
         )
         best_tag = " [BEST]" if is_new_best else ""
-        print(
+        self._emit_log(
             f"Step {timesteps_completed:>7d}/{self.total_timesteps} | "
             f"Fase: {training_phase:>8} | "
             f"Reward: {eval_summary['mean_episode_reward']:>7.2f} +/- {eval_summary['std_episode_reward']:>5.2f} | "
@@ -157,6 +167,11 @@ class PeriodicEvalCallback(BaseCallback):
         )
 
     def _on_step(self) -> bool:
+        if self.progress_callback is not None:
+            phase = "optimize" if self.survival_achieved else "survive"
+            self.progress_callback(int(self.num_timesteps), self.total_timesteps, phase)
+        if self.stop_event is not None and self.stop_event.is_set():
+            return False
         if self.num_timesteps >= self.next_eval_step:
             self._run_eval_checkpoint()
             while self.next_eval_step <= self.num_timesteps:
@@ -208,6 +223,9 @@ class ExperimentTrainer:
         progress_bar: bool = False,
         resume_from_run: str | Path | None = None,
         resume_checkpoint: str = "best",
+        stop_event: Any = None,
+        progress_callback: Any = None,
+        log_callback: Any = None,
     ) -> dict[str, Any]:
         config_sha256 = compute_file_sha256(self.agent.yaml_path)
         safe_experiment_name = experiment_name.strip().replace(" ", "_")
@@ -226,9 +244,17 @@ class ExperimentTrainer:
             safe_experiment_name = str(resumed_run_config["experiment_name"])
             snapshot_yaml_path = run_dir / "env_config_snapshot.yaml"
         else:
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_id = f"{timestamp_str}_{safe_experiment_name}_{config_sha256[:8]}"
+            now = datetime.now()
+            timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+            date_slug = now.strftime("%Y%m%d_%H%M")
+            run_id = f"{safe_experiment_name}_{date_slug}"
             run_dir = Path(runs_root_dir) / run_id
+            if run_dir.exists():
+                run_id = f"{safe_experiment_name}_{timestamp_str}"
+                run_dir = Path(runs_root_dir) / run_id
+            if run_dir.exists():
+                run_id = f"{safe_experiment_name}_{timestamp_str}_{config_sha256[:4]}"
+                run_dir = Path(runs_root_dir) / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
             snapshot_yaml_path = run_dir / "env_config_snapshot.yaml"
             shutil.copy2(self.agent.yaml_path, snapshot_yaml_path)
@@ -342,7 +368,16 @@ class ExperimentTrainer:
             best_timestep=best_timestep,
             survival_achieved=survival_achieved,
             milestone_announced=milestone_announced,
+            stop_event=stop_event,
+            progress_callback=progress_callback,
+            log_callback=log_callback,
         )
+
+        if log_callback is not None:
+            log_callback(
+                f"[PPO] Mulai training '{safe_experiment_name}' ({int(total_timesteps):,} steps, "
+                f"eval tiap {int(eval_interval_steps):,} steps, run_id={run_id})."
+            )
 
         if remaining_timesteps > 0:
             self.agent.training_env.training = True
@@ -358,6 +393,11 @@ class ExperimentTrainer:
         best_checkpoint_score = callback.best_checkpoint_score
         best_timestep = callback.best_timestep
         self.agent.save(str(final_model_path), str(final_vec_path))
+        if log_callback is not None:
+            log_callback(
+                f"[Evaluasi Akhir] Memuat best checkpoint (step {int(best_timestep):,}) "
+                f"untuk {int(final_eval_episodes)} episode evaluasi..."
+            )
 
         best_agent = self.agent.__class__.load(
             model_path=str(best_model_path),

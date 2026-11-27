@@ -154,6 +154,7 @@ class StudentPPOAgent:
         vf_coef: float = 0.5,
         demo_seed: int = 5000,
         verbose: bool = True,
+        log_callback: Any = None,
     ) -> dict[str, Any]:
         return self.pretrainer.pretrain(
             expert_fn=expert_fn,
@@ -165,6 +166,7 @@ class StudentPPOAgent:
             vf_coef=vf_coef,
             demo_seed=demo_seed,
             verbose=verbose,
+            log_callback=log_callback,
         )
 
     @staticmethod
@@ -256,6 +258,9 @@ class StudentPPOAgent:
         progress_bar: bool = False,
         resume_from_run: str | Path | None = None,
         resume_checkpoint: str = "best",
+        stop_event: Any = None,
+        progress_callback: Any = None,
+        log_callback: Any = None,
     ) -> dict[str, Any]:
         return self.trainer.run(
             total_timesteps=total_timesteps,
@@ -269,6 +274,9 @@ class StudentPPOAgent:
             progress_bar=progress_bar,
             resume_from_run=resume_from_run,
             resume_checkpoint=resume_checkpoint,
+            stop_event=stop_event,
+            progress_callback=progress_callback,
+            log_callback=log_callback,
         )
 
     def save(

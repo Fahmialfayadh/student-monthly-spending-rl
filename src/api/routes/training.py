@@ -27,6 +27,14 @@ def _get_jobs(request: Request) -> dict[str, dict[str, Any]]:
     return jobs
 
 
+def _get_stop_events(request: Request) -> dict[str, threading.Event]:
+    events = getattr(request.app.state, "training_stop_events", None)
+    if events is None:
+        events = {}
+        request.app.state.training_stop_events = events
+    return events
+
+
 def _parse_training_profile(payload: dict[str, Any]) -> TrainingProfileConfig:
     try:
         return TrainingProfileConfig.model_validate(payload)
@@ -53,7 +61,7 @@ def validate_training(req: TrainingValidateRequest) -> dict[str, Any]:
 
 @router.post("/start")
 def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any]:
-    """Menjalankan job training RL (BC opsional + MaskablePPO) secara asynchronous di background."""
+    """Menjalankan job training RL (BC opsional + MaskablePPO) di background dengan progress & stop support."""
     profile = _parse_training_profile(req.training_profile)
     world_cfg = resolve_world_config(req.config, req.preset_name, req.custom_config_name)
     try:
@@ -63,13 +71,24 @@ def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any
 
     job_id = uuid4().hex[:12]
     jobs = _get_jobs(request)
+    stop_events = _get_stop_events(request)
+    stop_event = threading.Event()
+    stop_events[job_id] = stop_event
+
+    total_ts = int(profile.schedule.total_timesteps)
     job_record: dict[str, Any] = {
         "job_id": job_id,
         "status": "running",
+        "phase": "bc_pretrain" if profile.bc.enabled else "survive",
+        "current_step": 0,
+        "total_timesteps": total_ts,
+        "progress_pct": 0.0,
+        "stop_requested": False,
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
         "experiment_name": profile.experiment_name,
         "warnings": warnings,
+        "logs": [],
         "run_dir": None,
         "bc_summary": None,
         "final_summary": None,
@@ -83,8 +102,24 @@ def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any
         else ROOT_DIR / profile.runs_root_dir
     )
 
+    def _on_log(message: str) -> None:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        job_record["logs"].append(f"[{stamp}] {message}")
+        if len(job_record["logs"]) > 300:
+            del job_record["logs"][: len(job_record["logs"]) - 300]
+
+    def _on_progress(current_step: int, total_steps: int, phase: str) -> None:
+        job_record["current_step"] = int(current_step)
+        job_record["total_timesteps"] = int(total_steps)
+        job_record["progress_pct"] = round(min(100.0, (current_step / max(1, total_steps)) * 100.0), 1)
+        job_record["phase"] = phase
+
     def _run_job() -> None:
         try:
+            _on_log(
+                f"Job {job_id} dimulai ({profile.experiment_name} | "
+                f"{total_ts:,} steps | envs={profile.ppo.num_environments} | device={profile.ppo.device})."
+            )
             with tempfile.TemporaryDirectory() as tmp_cfg_dir:
                 cfg_file = Path(tmp_cfg_dir) / "world_config.yaml"
                 cfg_file.write_text(
@@ -114,7 +149,8 @@ def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any
                     device=ppo.device,
                     verbose=0,
                 )
-                if profile.bc.enabled:
+                if profile.bc.enabled and not stop_event.is_set():
+                    job_record["phase"] = "bc_pretrain"
                     bc_res = agent.pretrain_bc(
                         num_episodes=profile.bc.num_episodes,
                         epochs=profile.bc.epochs,
@@ -124,6 +160,7 @@ def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any
                         vf_coef=profile.bc.vf_coef,
                         demo_seed=profile.bc.demo_seed,
                         verbose=False,
+                        log_callback=_on_log,
                     )
                     job_record["bc_summary"] = {
                         k: v for k, v in bc_res.items() if k != "history"
@@ -140,12 +177,29 @@ def start_training(req: TrainingStartRequest, request: Request) -> dict[str, Any
                     experiment_name=profile.experiment_name,
                     runs_root_dir=str(runs_root),
                     progress_bar=False,
+                    stop_event=stop_event,
+                    progress_callback=_on_progress,
+                    log_callback=_on_log,
                 )
                 agent.training_env.close()
                 job_record["run_dir"] = str(run_res["run_dir"])
                 job_record["final_summary"] = run_res["final_summary"]
-                job_record["status"] = "completed"
+                fs = run_res["final_summary"]
+                _on_log(
+                    f"[Selesai] Complete={fs['completion_rate'] * 100:.0f}% | "
+                    f"Hari={fs['mean_days_survived']:.1f} | "
+                    f"Reward={fs['mean_episode_reward']:.2f} | "
+                    f"Sisa=Rp {fs['mean_final_balance_idr']:,.0f} | "
+                    f"Disimpan di {Path(run_res['run_dir']).name}"
+                )
+                if stop_event.is_set():
+                    job_record["status"] = "stopped"
+                else:
+                    job_record["current_step"] = total_ts
+                    job_record["progress_pct"] = 100.0
+                    job_record["status"] = "completed"
         except Exception as exc:
+            _on_log(f"[ERROR] {exc}")
             job_record["error"] = str(exc)
             job_record["status"] = "failed"
         finally:
@@ -168,4 +222,21 @@ def get_training_job(job_id: str, request: Request) -> dict[str, Any]:
     job = _get_jobs(request).get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' tidak ditemukan.")
+    return job
+
+
+@router.post("/jobs/{job_id}/stop")
+def stop_training_job(job_id: str, request: Request) -> dict[str, Any]:
+    """Mengirim sinyal berhenti aman ke job training RL yang sedang berjalan."""
+    job = _get_jobs(request).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' tidak ditemukan.")
+    ev = _get_stop_events(request).get(job_id)
+    if ev is not None and job["status"] == "running":
+        ev.set()
+        job["stop_requested"] = True
+        stamp = datetime.now().strftime("%H:%M:%S")
+        job.setdefault("logs", []).append(
+            f"[{stamp}] [Stop] Permintaan berhenti diterima; menyimpan checkpoint aman..."
+        )
     return job

@@ -233,6 +233,25 @@ def delete_custom_config(name: str) -> dict[str, Any]:
     return {"deleted": True, "scope": "custom", "name": slug}
 
 
+@router.post("/configs/render-yaml")
+def render_yaml_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    """Memvalidasi payload WorldConfig lalu mengembalikan teks YAML tanpa menulis ke disk."""
+    try:
+        cfg = WorldConfig.model_validate(payload)
+        WorldGraph(cfg)
+    except ValidationError as exc:
+        raise validation_error_http(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    yaml_text = yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
+    return {
+        "valid": True,
+        "sha256": compute_text_sha256(yaml_text),
+        "yaml_text": yaml_text,
+    }
+
+
 @router.post("/config/validate")
 def validate_config(payload: dict[str, Any]) -> dict[str, Any]:
     """Memvalidasi payload WorldConfig UI, konektivitas WorldGraph, dan dimensi env."""

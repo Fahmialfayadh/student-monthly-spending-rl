@@ -9,7 +9,7 @@ class RoutePreviewRequest(BaseModel):
     """Payload permintaan simulasi biaya & beban fisik antar-node pada graf."""
 
     config: dict[str, Any] | None = None
-    preset_name: str | None = "surabaya_its"
+    preset_name: str | None = "standard_student"
     custom_config_name: str | None = None
     source_node_id: str
     target_node_id: str
@@ -23,7 +23,7 @@ class SimCreateRequest(BaseModel):
     """Payload pembuatan sesi interaktif sandbox environment untuk UI."""
 
     config: dict[str, Any] | None = None
-    preset_name: str | None = "surabaya_its"
+    preset_name: str | None = "standard_student"
     custom_config_name: str | None = None
     seed: int = 42
     exploring_starts_pantry: bool | None = None
@@ -75,7 +75,7 @@ class TrainingValidateRequest(BaseModel):
 
     training_profile: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] | None = None
-    preset_name: str | None = "surabaya_its"
+    preset_name: str | None = "standard_student"
     custom_config_name: str | None = None
 
 
@@ -84,5 +84,5 @@ class TrainingStartRequest(BaseModel):
 
     training_profile: dict[str, Any] = Field(default_factory=dict)
     config: dict[str, Any] | None = None
-    preset_name: str | None = "surabaya_its"
+    preset_name: str | None = "standard_student"
     custom_config_name: str | None = None

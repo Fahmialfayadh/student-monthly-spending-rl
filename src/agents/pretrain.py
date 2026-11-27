@@ -101,7 +101,7 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
     desired_bundle_tuple = (need_rice, need_egg, need_chicken, need_tempe)
 
     grocery_bundle = _first_valid(
-        mask, offsets, "grocery_bundle", len(PantryManager.GROCERY_BUNDLES)
+        mask, offsets, "grocery_bundle", len(env.pantry.grocery_bundles)
     )
     wants_grocery = False
     if any(desired_bundle_tuple):
@@ -176,7 +176,7 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
     bring_bekal = 1 if (_is_allowed(mask, offsets, "bring_bekal", 1) and leaving_for_campus_or_hub) else 0
 
     # 5. Pilih komposisi masak (prioritaskan variasi anti-boredom & bahan cepat basi)
-    cook_combo = _first_valid(mask, offsets, "cook_combo", len(PantryManager.COOK_COMBOS))
+    cook_combo = _first_valid(mask, offsets, "cook_combo", len(env.pantry.cook_combos))
     valid_combos = [
         idx for idx in _PREFERRED_COMBOS if _is_allowed(mask, offsets, "cook_combo", idx)
     ]
@@ -185,13 +185,13 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
         chicken_life = env.pantry.get_min_ingredient_shelf_life("chicken") or 999
 
         def _combo_priority(combo_idx: int) -> tuple[int, int, float]:
-            qty = PantryManager.decode_cook_combo(combo_idx)
+            qty = env.pantry.decode_cook_combo_dict(combo_idx)
             _, _, _, sig = env.pantry.calculate_custom_meal_profile(qty)
             repeats = env.pantry.get_recent_meal_count(sig)
             urgency_bonus = 0
-            if qty["tempe"] > 0 and tempe_life <= 10:
+            if qty.get("tempe", 0) > 0 and tempe_life <= 10:
                 urgency_bonus -= 2
-            if qty["chicken"] > 0 and chicken_life <= 12:
+            if qty.get("chicken", 0) > 0 and chicken_life <= 12:
                 urgency_bonus -= 2
             cost = env.pantry.compute_combo_ingredient_value_idr(qty)
             return (repeats, urgency_bonus, cost)
@@ -212,7 +212,7 @@ def default_balanced_expert_policy(env: StudentLifeEnv) -> np.ndarray:
         prep_candidates = [
             idx
             for idx in valid_combos
-            if env.pantry.max_portions_possible(PantryManager.decode_cook_combo(idx)) >= 3
+            if env.pantry.max_portions_possible(env.pantry.decode_cook_combo_dict(idx)) >= 3
         ]
         if prep_candidates:
             cook_combo = prep_candidates[0]
@@ -340,17 +340,29 @@ class BehaviorCloningPretrainer:
         max_grad_norm: float = 0.5,
         demo_seed: int = 5000,
         verbose: bool = True,
+        log_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """
         Melatih Actor (masked Cross-Entropy + entropy bonus) dan Critic (MSE return)
         pada agent.model.policy menggunakan data demonstrasi, lalu menyinkronkan VecNormalize.
         """
+        if log_callback is not None:
+            log_callback(
+                f"[BC Pretrain] Mengumpulkan {int(num_episodes)} episode demonstrasi heuristik..."
+            )
         demo_data = self.collect_demonstrations(
             expert_fn=expert_fn,
             num_episodes=num_episodes,
             seed=demo_seed,
         )
         self.warmup_vec_normalize(demo_data["observations"], demo_data["running_returns"])
+        if log_callback is not None:
+            log_callback(
+                f"[BC Pretrain] Demo siap: {int(demo_data['observations'].shape[0]):,} transisi | "
+                f"mean_reward={demo_data['demo_mean_reward']:.2f} | "
+                f"complete={demo_data['demo_completion_rate'] * 100:.0f}% | "
+                f"sisa=Rp {demo_data['demo_mean_final_balance_idr']:,.0f}"
+            )
 
         vec_env = self.agent.training_env
         norm_obs = vec_env.normalize_obs(demo_data["observations"]).astype(np.float32)
@@ -411,13 +423,16 @@ class BehaviorCloningPretrainer:
                 "entropy": float(np.mean(epoch_entropies)),
             }
             history.append(row)
+            msg = (
+                f"[BC Pretrain] Epoch {epoch_idx:>2d}/{epochs} | "
+                f"actor_loss={row['actor_loss']:.4f} | "
+                f"critic_loss={row['critic_loss']:.4f} | "
+                f"entropy={row['entropy']:.3f}"
+            )
+            if log_callback is not None:
+                log_callback(msg)
             if verbose and (epoch_idx == 1 or epoch_idx % 5 == 0 or epoch_idx == int(epochs)):
-                print(
-                    f"[BC Pretrain] Epoch {epoch_idx:>2d}/{epochs} | "
-                    f"actor_loss={row['actor_loss']:.4f} | "
-                    f"critic_loss={row['critic_loss']:.4f} | "
-                    f"entropy={row['entropy']:.3f}"
-                )
+                print(msg)
 
         policy.set_training_mode(False)
         return {

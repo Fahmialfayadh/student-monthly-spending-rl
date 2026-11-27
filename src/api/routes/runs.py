@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -97,3 +98,27 @@ def get_run_trace(
 
     df = pd.read_csv(trace_path).head(limit).astype(object).fillna("")
     return {"run_id": run_id, "steps": df.to_dict("records")}
+
+
+@router.delete("/{run_id}")
+def delete_run(run_id: str) -> dict[str, Any]:
+    """Menghapus folder experiment run dan baris terkait di experiments_summary.csv."""
+    if "/" in run_id or "\\" in run_id or run_id in ("", ".", ".."):
+        raise HTTPException(status_code=400, detail="run_id tidak valid.")
+    root = _runs_root().resolve()
+    run_dir = (root / run_id).resolve()
+    if run_dir.parent != root or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' tidak ditemukan.")
+
+    shutil.rmtree(run_dir)
+
+    master_summary = root / "experiments_summary.csv"
+    if master_summary.exists():
+        try:
+            df = pd.read_csv(master_summary)
+            if "run_id" in df.columns:
+                df[df["run_id"] != run_id].to_csv(master_summary, index=False)
+        except Exception:
+            pass
+
+    return {"deleted": True, "run_id": run_id}

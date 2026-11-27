@@ -22,7 +22,7 @@ def format_step_events_summary(step_events: dict[str, Any]) -> str:
         event_tags.append("activity_cancelled_low_balance")
     if step_events.get("transit_minimarket_impulse"):
         event_tags.append("transit_minimarket_impulse")
-    if step_events.get("ccws_minimarket_impulse") or step_events.get("node_minimarket_impulse"):
+    if step_events.get("node_minimarket_impulse"):
         event_tags.append("node_minimarket_impulse")
     if "cafe_spend_idr" in step_events:
         cafe_total = int(step_events["cafe_spend_idr"]) + int(
@@ -274,7 +274,6 @@ class StudentEvaluator:
                     night_cramming_count += 1
                 if (
                     step_events.get("transit_minimarket_impulse")
-                    or step_events.get("ccws_minimarket_impulse")
                     or step_events.get("node_minimarket_impulse")
                 ):
                     minimarket_impulse_count += 1

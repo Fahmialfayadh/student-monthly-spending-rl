@@ -100,7 +100,7 @@ def resolve_world_config(
             )
         return load_world_config(custom_path)
 
-    target_preset = preset_name or "surabaya_its"
+    target_preset = preset_name or "standard_student"
     preset_slug = validate_config_slug(target_preset)
     preset_path = PRESETS_DIR / f"{preset_slug}.yaml"
     if not preset_path.exists():
