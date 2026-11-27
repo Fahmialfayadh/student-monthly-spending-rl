@@ -25,7 +25,7 @@ from src.env.pricing import compute_edge_fare_bounds, compute_edge_physical_delt
 from src.env.schema import EdgePricingConfig, EdgeRouteConfig, MobilityAndClimateConfig
 
 
-SURABAYA_YAML = "configs/presets/surabaya_its.yaml"
+STANDARD_YAML = "configs/presets/standard_student.yaml"
 MINIMAL_YAML = "configs/presets/minimal_dorm.yaml"
 
 
@@ -62,7 +62,7 @@ def test_schema_export_and_validation() -> None:
     ):
         assert required_section in schema["properties"]
 
-    raw = load_world_config(SURABAYA_YAML).model_dump()
+    raw = load_world_config(STANDARD_YAML).model_dump()
     bad_home = copy.deepcopy(raw)
     bad_home["world_graph"]["home_node_id"] = "cafe"  # cafe has can_sleep=False
     with pytest.raises(Exception):
@@ -146,38 +146,38 @@ def test_distance_and_zone_pricing_models() -> None:
     assert f_rain_min > f_min
 
 
-def test_surabaya_graph_routing_and_1_5km_walk_parity() -> None:
-    env = StudentLifeEnv(SURABAYA_YAML)
+def test_standard_graph_routing_and_1_5km_walk_parity() -> None:
+    env = StudentLifeEnv(STANDARD_YAML)
     obs, _ = env.reset(seed=1)
 
-    assert env.balance_idr == 1_465_000.0
+    assert env.balance_idr == 1_750_000.0
     assert obs.shape == (56,)
     assert env.action_space.nvec.tolist() == [8, 2, 6, 18, 2, 15]
 
-    # Dijkstra fastest vs cheapest from apartment -> department
-    fastest = env.world_graph.find_best_path("apartment", "department", "fastest", "cool", "normal", False)
-    cheapest = env.world_graph.find_best_path("apartment", "department", "cheapest", "cool", "normal", False)
+    # Dijkstra fastest vs cheapest from home -> campus
+    fastest = env.world_graph.find_best_path("home", "campus", "fastest", "cool", "normal", False)
+    cheapest = env.world_graph.find_best_path("home", "campus", "cheapest", "cool", "normal", False)
     assert fastest is not None and cheapest is not None
-    assert [e.id for e in fastest.edges] == ["direct_ojol"]
-    assert [e.id for e in cheapest.edges] == ["transit_ccws_ojol", "walk_ccws_department_1_5km"]
-    assert np.isclose(cheapest.total_distance_km, 3.7)
-    assert np.isclose(cheapest.min_fare_idr, 7000.0)
+    assert [e.id for e in fastest.edges] == ["direct_ride"]
+    assert [e.id for e in cheapest.edges] == ["transit_hub_ride", "walk_hub_campus"]
+    assert np.isclose(cheapest.total_distance_km, 3.6)
+    assert np.isclose(cheapest.min_fare_idr, 5000.0)
 
-    # Execute attend_class via cheapest from apartment at step 3 (Monday 13-17 has class in schedule)
+    # Execute attend_class via cheapest from home at step 1 (Monday sesi_1 has class in schedule)
     env.reset(seed=7)
-    env.current_step = 3
+    env.current_step = 1
     attend_idx = env.activity_names.index("attend_class")
     cheapest_idx = env.route_names.index("cheapest")
     _, _, _, _, info = env.step([attend_idx, cheapest_idx, 0, 0, 0, 0])
     events = info["step_events"]
-    assert info["current_location"] == "department"
-    assert events["executed_route"] == "transit_ccws_ojol->walk_ccws_department_1_5km"
-    assert events["walked_edge"] == "walk_ccws_department_1_5km"
-    assert np.isclose(events["travel_distance_km"], 3.7)
+    assert info["current_location"] == "campus"
+    assert events["executed_route"] == "transit_hub_ride->walk_hub_campus"
+    assert events["walked_edge"] == "walk_hub_campus"
+    assert np.isclose(events["travel_distance_km"], 3.6)
 
 
 def test_cafe_as_real_node_capabilities_and_curfew() -> None:
-    env = StudentLifeEnv(SURABAYA_YAML)
+    env = StudentLifeEnv(STANDARD_YAML)
     env.reset(seed=42)
     cafe_node = env.world_graph.get_node("cafe")
     assert cafe_node.can_study is True
@@ -264,9 +264,9 @@ def test_fastapi_endpoints_and_sandbox_flow() -> None:
     r_presets = client.get("/presets")
     assert r_presets.status_code == 200
     names = {item["name"] for item in r_presets.json()["presets"]}
-    assert {"surabaya_its", "minimal_dorm"}.issubset(names)
+    assert {"standard_student", "minimal_dorm"}.issubset(names)
 
-    r_cfg = client.get("/presets/surabaya_its")
+    r_cfg = client.get("/presets/standard_student")
     assert r_cfg.status_code == 200
     cfg_payload = r_cfg.json()["config"]
 
@@ -283,8 +283,8 @@ def test_fastapi_endpoints_and_sandbox_flow() -> None:
     r_route = client.post(
         "/graph/preview-route",
         json={
-            "preset_name": "surabaya_its",
-            "source_node_id": "apartment",
+            "preset_name": "standard_student",
+            "source_node_id": "home",
             "target_node_id": "cafe",
             "preference": "fastest",
             "climate": "midday",
@@ -293,7 +293,7 @@ def test_fastapi_endpoints_and_sandbox_flow() -> None:
         },
     )
     assert r_route.status_code == 200
-    assert r_route.json()["edge_ids"] == ["ojol_apartment_cafe"]
+    assert r_route.json()["edge_ids"] == ["ride_home_cafe"]
     assert r_route.json()["min_fare_idr"] == 8500.0
 
     r_sess = client.post("/sim/sessions", json={"preset_name": "minimal_dorm", "seed": 11})
@@ -414,17 +414,17 @@ def test_local_config_save_load_sync_and_import(tmp_path: Path, monkeypatch: pyt
 
 
 def test_user_walk_preference_and_distance_limit() -> None:
-    raw = load_world_config(SURABAYA_YAML).model_dump()
+    raw = load_world_config(STANDARD_YAML).model_dump()
 
     # 1. User limits walking to 1.0 km -> 1.5 km walk edge is skipped; cheapest falls back to direct motorized
     limited = copy.deepcopy(raw)
     limited["mobility_and_climate"]["walk_physics"]["max_walk_distance_km"] = 1.0
     graph_limited = WorldGraph(WorldConfig.model_validate(limited))
     p_limited = graph_limited.find_best_path(
-        "apartment", "department", preference="cheapest", climate="cool", ojol_tariff="normal", is_raining=False
+        "home", "campus", preference="cheapest", climate="cool", ojol_tariff="normal", is_raining=False
     )
     assert p_limited is not None
-    assert [e.id for e in p_limited.edges] == ["direct_ojol"]
+    assert [e.id for e in p_limited.edges] == ["direct_ride"]
     assert p_limited.walk_distance_km == 0.0
 
     # 2. User allows 2.0 km when dry, but max 0.5 km when raining -> rain blocks 1.5 km walk
@@ -433,16 +433,16 @@ def test_user_walk_preference_and_distance_limit() -> None:
     rain_limited["mobility_and_climate"]["walk_physics"]["max_walk_distance_rain_km"] = 0.5
     graph_rain = WorldGraph(WorldConfig.model_validate(rain_limited))
     p_dry = graph_rain.find_best_path(
-        "apartment", "department", preference="cheapest", is_raining=False
+        "home", "campus", preference="cheapest", is_raining=False
     )
     p_wet = graph_rain.find_best_path(
-        "apartment", "department", preference="cheapest", is_raining=True
+        "home", "campus", preference="cheapest", is_raining=True
     )
     assert p_dry is not None and [e.id for e in p_dry.edges] == [
-        "transit_ccws_ojol",
-        "walk_ccws_department_1_5km",
+        "transit_hub_ride",
+        "walk_hub_campus",
     ]
-    assert p_wet is not None and [e.id for e in p_wet.edges] == ["direct_ojol"]
+    assert p_wet is not None and [e.id for e in p_wet.edges] == ["direct_ride"]
 
     # 3. minimal_dorm: prefer_walk vs avoid_walk changes route even on same preference
     dorm_raw = load_world_config(MINIMAL_YAML).model_dump()
@@ -550,10 +550,17 @@ def test_typed_schema_training_api_runs_and_autostep(
             break
         time.sleep(0.25)
     assert job_data is not None and job_data["status"] == "completed", job_data
+    assert job_data["progress_pct"] == 100.0
+    assert isinstance(job_data.get("logs"), list) and len(job_data["logs"]) >= 4
+    joined_logs = "\n".join(job_data["logs"])
+    assert "[BC Pretrain]" in joined_logs
+    assert "Reward:" in joined_logs
+    assert client.post("/training/jobs/nonexistent/stop").status_code == 404
 
     runs_list = client.get("/runs").json()["runs"]
     assert len(runs_list) == 1
     run_id = runs_list[0]["run_id"]
+    assert run_id.startswith("api_smoke_")
     run_detail = client.get(f"/runs/{run_id}").json()
     assert run_detail["final_summary"] is not None
     run_trace = client.get(f"/runs/{run_id}/trace").json()
@@ -577,6 +584,44 @@ def test_typed_schema_training_api_runs_and_autostep(
     assert r_rst.status_code == 200 and r_rst.json()["graph_state"]["current_step"] == 0
     client.delete(f"/sim/sessions/{sid}")
 
+    # 5. Delete run cleanly
+    r_del_run = client.delete(f"/runs/{run_id}")
+    assert r_del_run.status_code == 200 and r_del_run.json()["deleted"] is True
+    assert client.get("/runs").json()["runs"] == []
+
+
+def test_custom_kitchen_ingredient_end_to_end() -> None:
+    raw = load_world_config(MINIMAL_YAML).model_dump()
+    raw["pantry_and_cooking"]["ingredients"]["kopi"] = {
+        "label": "Kopi Sachet",
+        "pack_price_idr": 18000,
+        "units_per_pack": 10,
+        "shelf_life_steps": 150,
+        "nutrition_per_unit": {"hunger": -5, "energy": 16, "mood": 9},
+    }
+    raw["pantry_and_cooking"]["initial_pantry"]["kopi"] = 4
+
+    env = StudentLifeEnv(raw)
+    obs, _ = env.reset(seed=3)
+    assert env.pantry.get_ingredient_total_units("kopi") == 4
+    # Extra ingredient adds 2 cook combos (solo + with rice) and 2 grocery bundles
+    assert env.action_space.nvec[3] == 20
+    assert env.action_space.nvec[5] == 17
+    labels = env.get_action_labels()
+    assert any("Kopi Sachet" in lbl for lbl in labels["cook_combo"])
+    assert any("Kopi Sachet" in lbl for lbl in labels["grocery_bundle"])
+
+    # Consume 1 Kopi Sachet via cook_fresh
+    env.biometrics.hunger = 50.0
+    env.biometrics.energy = 80.0
+    env.biometrics.mood = 75.0
+    kopi_solo_idx = 18
+    obs, reward, _, _, info = env.step([0, 0, 1, kopi_solo_idx, 0, 0])
+    assert np.all(np.isfinite(obs)) and np.isfinite(reward)
+    assert info["step_events"]["executed_meal_mode"] == "cook_fresh"
+    assert env.pantry.get_ingredient_total_units("kopi") == 3
+    assert info["pantry_totals"]["kopi"] == 3
+
 
 def test_frontend_static_pages_served() -> None:
     client = TestClient(app)
@@ -585,6 +630,8 @@ def test_frontend_static_pages_served() -> None:
         "/css/tokens.css",
         "/css/app.css",
         "/js/main.js",
+        "/js/utils.js",
+        "/js/tooltip.js",
         "/partials/graph_studio.html",
         "/partials/env_config.html",
         "/partials/simulation.html",
@@ -592,3 +639,17 @@ def test_frontend_static_pages_served() -> None:
     ):
         resp = client.get(path)
         assert resp.status_code == 200, f"Failed serving {path}"
+
+    # Verify read-only /configs/render-yaml and descriptive action labels
+    std_cfg = client.get("/presets/standard_student").json()["config"]
+    r_yaml = client.post("/configs/render-yaml", json=std_cfg)
+    assert r_yaml.status_code == 200
+    assert "world_graph:" in r_yaml.json()["yaml_text"]
+
+    sess = client.post("/sim/sessions", json={"preset_name": "standard_student", "seed": 1}).json()
+    assert isinstance(sess["action_labels"]["cook_combo"][0], str)
+    assert "Beli:" in sess["action_labels"]["grocery_bundle"][0]
+    assert "current_day" in sess["graph_state"]
+    assert "time_slot_name" in sess["graph_state"]
+    assert "spending_by_category_idr" in sess["graph_state"]
+    client.delete(f"/sim/sessions/{sess['session_id']}")
