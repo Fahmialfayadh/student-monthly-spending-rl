@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="406" viewBox="0 0 800 406" role="img" aria-labelledby="t">
+<title id="t">System architecture of StudentLifeEnv</title>
+<style>
+  text { font-family: 'Times New Roman', 'Liberation Serif', 'Libertinus Serif', serif; fill: #111; text-anchor: middle; }
+  .title { font-size: 15px; font-weight: bold; }
+  .name { font-size: 13px; font-weight: bold; }
+  .desc { font-size: 12px; }
+  .edge { font-size: 12px; font-style: italic; }
+  .mono { font-family: 'DejaVu Sans Mono', 'Liberation Mono', Consolas, monospace; font-size: 10px; }
+</style>
+<rect width="800" height="406" fill="#fff"/>
+<rect x="10" y="111" width="114" height="78" rx="3" fill="#fff" stroke="#222" stroke-width="1"/>
+<text x="67" y="135" class="title">WorldConfig</text>
+<text x="67" y="155" class="desc">YAML / JSON</text>
+<text x="67" y="171" class="desc">Pydantic v2 schema</text>
+<line x1="124" y1="150" x2="144" y2="150" stroke="#222" stroke-width="1.2"/>
+<polygon points="150,150 142,146 142,154" fill="#222"/>
+<rect x="150" y="10" width="270" height="280" rx="3" fill="#f2f2f2" stroke="#222" stroke-width="1"/>
+<text x="285.0" y="28" class="title">StudentLifeEnv</text>
+<text x="285.0" y="45" class="desc">Gymnasium MDP · <tspan class="mono">src/env/</tspan></text>
+<rect x="158" y="58" width="254" height="40" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="285.0" y="75.0" class="name">FinanceManager</text>
+<text x="285.0" y="91.0" class="desc">Budget and cashflow</text>
+<rect x="158" y="104" width="254" height="40" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="285.0" y="121.0" class="name">PantryManager</text>
+<text x="285.0" y="137.0" class="desc">Smart-FIFO and recipes</text>
+<rect x="158" y="150" width="254" height="40" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="285.0" y="167.0" class="name">BiometricsState</text>
+<text x="285.0" y="183.0" class="desc">Energy, hunger, mood, stress, craving</text>
+<rect x="158" y="196" width="254" height="40" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="285.0" y="213.0" class="name">AcademicSchedule</text>
+<text x="285.0" y="229.0" class="desc">Weekly classes and attendance</text>
+<rect x="158" y="242" width="254" height="40" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="285.0" y="259.0" class="name">WorldGraph + Pricing</text>
+<text x="285.0" y="275.0" class="desc">Dijkstra router and fare models</text>
+<rect x="524" y="10" width="266" height="280" rx="3" fill="#f2f2f2" stroke="#222" stroke-width="1"/>
+<text x="657.0" y="28" class="title">StudentPPOAgent</text>
+<text x="657.0" y="45" class="desc">Training and evaluation · <tspan class="mono">src/agents/</tspan></text>
+<rect x="532" y="58" width="250" height="51.5" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="657.0" y="80.75" class="name">StudentFeaturesExtractor</text>
+<text x="657.0" y="96.75" class="desc">Residual MLP (LayerNorm + SiLU)</text>
+<rect x="532" y="115.5" width="250" height="51.5" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="657.0" y="138.25" class="name">BehaviorCloningPretrainer</text>
+<text x="657.0" y="154.25" class="desc">Warm-start: masked CE + critic MSE</text>
+<rect x="532" y="173.0" width="250" height="51.5" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="657.0" y="195.75" class="name">MaskablePPO + VecNormalize</text>
+<text x="657.0" y="211.75" class="desc">Survival-gated LR annealing</text>
+<rect x="532" y="230.5" width="250" height="51.5" rx="3" fill="#fff" stroke="#777" stroke-width="0.8"/>
+<text x="657.0" y="253.25" class="name">StudentEvaluator &amp; ExperimentTrainer</text>
+<text x="657.0" y="269.25" class="desc">Checkpoints, traces, and summaries</text>
+<text x="472" y="90" class="edge">observation,</text>
+<text x="472" y="104" class="edge">reward,</text>
+<text x="472" y="118" class="edge">action mask</text>
+<line x1="420" y1="130" x2="518" y2="130" stroke="#222" stroke-width="1.2"/>
+<polygon points="524,130 516,126 516,134" fill="#222"/>
+<line x1="524" y1="170" x2="426" y2="170" stroke="#222" stroke-width="1.2"/>
+<polygon points="420,170 428,166 428,174" fill="#222"/>
+<text x="472" y="187" class="edge">action</text>
+<line x1="378" y1="290" x2="378" y2="320" stroke="#222" stroke-width="1.2"/>
+<polygon points="378,326 374,318 382,318" fill="#222"/>
+<line x1="566" y1="290" x2="566" y2="320" stroke="#222" stroke-width="1.2"/>
+<polygon points="566,326 562,318 570,318" fill="#222"/>
+<rect x="346" y="326" width="252" height="70" rx="3" fill="#fff" stroke="#222" stroke-width="1"/>
+<text x="472" y="358" class="title">FastAPI Backend</text>
+<text x="472" y="378" class="mono">src/api/</text>
+<rect x="630" y="326" width="160" height="70" rx="3" fill="#fff" stroke="#222" stroke-width="1"/>
+<text x="710" y="344" class="title">Web Studio</text>
+<text x="710" y="358" class="mono">frontend/</text>
+<text x="710" y="374" class="desc">Config · Spatial map</text>
+<text x="710" y="388" class="desc">Training · Replay</text>
+<line x1="604" y1="361" x2="624" y2="361" stroke="#222" stroke-width="1.2"/>
+<polygon points="598,361 606,357 606,365" fill="#222"/>
+<polygon points="630,361 622,357 622,365" fill="#222"/>
+</svg>

@@ -14,14 +14,14 @@ environment:
     4: {name: malam,     hours: "18:30-22:30", climate: cool,   ojol_tariff: normal, hunger_gain: 20.0, rain_prob: 0.20}
 
 finance:
-  monthly_budget: 1500000
+  monthly_budget: 2500000
   fixed_expenses:
-    mobile_data: 35000
+    mobile_data: 50000
   alerts:
-    low_balance_threshold: 250000
+    low_balance_threshold: 300000
   late_month_impulsivity:
     start_day: 22
-    weight: 0.50
+    weight: 0.45
 
 pantry_and_cooking:
   initial_pantry:
@@ -366,11 +366,11 @@ activities:
 
 academics:
   weekly_schedule:
-    monday:    [0, 1, 0, 1, 0]
-    tuesday:   [0, 1, 1, 0, 0]
+    monday:    [0, 1, 1, 0, 0]
+    tuesday:   [0, 1, 0, 1, 0]
     wednesday: [0, 1, 1, 0, 0]
-    thursday:  [0, 1, 0, 1, 0]
-    friday:    [0, 0, 1, 0, 0]
+    thursday:  [0, 0, 1, 1, 0]
+    friday:    [0, 1, 0, 0, 0]
     saturday:  [0, 0, 0, 0, 0]
     sunday:    [0, 0, 0, 0, 0]
   weekday_task_probability: 1.0
