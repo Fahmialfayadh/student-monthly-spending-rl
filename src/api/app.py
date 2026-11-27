@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.routes import (
     configs_router,
@@ -42,6 +45,17 @@ def create_app() -> FastAPI:
     application.include_router(simulation_router)
     application.include_router(training_router)
     application.include_router(runs_router)
+
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
+    if frontend_dir.exists():
+        for subdir in ("css", "js", "partials"):
+            subpath = frontend_dir / subdir
+            if subpath.exists():
+                application.mount(f"/{subdir}", StaticFiles(directory=str(subpath)), name=subdir)
+
+        @application.get("/", include_in_schema=False)
+        def serve_index() -> FileResponse:
+            return FileResponse(str(frontend_dir / "index.html"))
 
     return application
 

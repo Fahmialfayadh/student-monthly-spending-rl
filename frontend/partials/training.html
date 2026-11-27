@@ -1,0 +1,48 @@
+<section id="panel-training" class="tab-panel" role="tabpanel" hidden>
+  <div class="split-layout">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>RL Training &amp; Hyperparameters</h2>
+          <p class="panel-sub">MaskablePPO, Behavior Cloning warm-start, dan cross-validasi gamma</p>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button id="btn-train-validate" class="btn btn-sm" type="button">Validate</button>
+          <button id="btn-train-start" class="btn btn-sm btn-primary" type="button">Start Training</button>
+        </div>
+      </div>
+      <div class="panel-body stack-col" style="gap: 12px;" id="training-form-container"></div>
+    </div>
+
+    <div class="stack-col">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Active Jobs</h2>
+            <p class="panel-sub">Polling status training di background</p>
+          </div>
+          <button id="btn-refresh-runs" class="btn btn-sm" type="button">Refresh</button>
+        </div>
+        <div class="panel-body" id="training-jobs-list">
+          <p class="panel-sub">No training jobs started in this server session.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Saved Runs</h2>
+            <p class="panel-sub">Inspeksi metrik hasil training di runs/</p>
+          </div>
+        </div>
+        <div class="panel-body stack-col" style="gap: 12px;">
+          <select id="runs-select" class="control-select mono"></select>
+          <div id="run-summary-metrics" class="metric-strip"></div>
+          <div id="run-chart-container" style="border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px; background: var(--bg-subtle);">
+            <svg id="run-eval-svg" viewBox="0 0 520 170" style="width: 100%; height: 170px; display: block;"></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

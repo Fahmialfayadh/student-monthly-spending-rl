@@ -1,0 +1,86 @@
+<section id="panel-simulation" class="tab-panel" role="tabpanel" hidden>
+  <div class="split-layout">
+    <div class="stack-col">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Live Spatial Sandbox</h2>
+            <p class="panel-sub" id="sim-step-subtitle">Step 0 · Reset or run steps manually / via trained policy</p>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <select id="sim-policy-mode" class="control-select" style="width: 145px;">
+              <option value="heuristic">Heuristic Expert</option>
+              <option value="model">Trained Run Model</option>
+            </select>
+            <select id="sim-run-select" class="control-select mono" style="width: 170px;" hidden></select>
+            <button id="btn-sim-autostep" class="btn btn-sm btn-primary" type="button">Auto Step</button>
+            <button id="btn-sim-play" class="btn btn-sm" type="button">Play</button>
+            <button id="btn-sim-reset" class="btn btn-sm" type="button">Reset</button>
+          </div>
+        </div>
+        <div class="graph-stage" style="height: 410px;">
+          <svg id="sim-graph-svg" class="graph-svg" viewBox="0 0 820 410"></svg>
+          <div class="graph-legend">
+            <span class="legend-item"><span class="legend-dot" style="background: var(--graph-agent);"></span>Agent Position</span>
+            <span class="legend-item"><span class="legend-dot" style="background: var(--graph-route-fast);"></span>Last Traversed Route</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Step Log</h2>
+        </div>
+        <div class="panel-body" style="max-height: 220px; overflow: auto; padding: 0;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Step</th>
+                <th>Location</th>
+                <th>Activity</th>
+                <th>Route</th>
+                <th>Meal</th>
+                <th>Balance</th>
+                <th>Reward</th>
+              </tr>
+            </thead>
+            <tbody id="sim-log-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="stack-col">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Biometrics &amp; Finance</h2>
+        </div>
+        <div class="panel-body stack-col" style="gap: 10px;">
+          <div class="metric-strip">
+            <div class="metric-box">
+              <div class="metric-box-label">Balance (IDR)</div>
+              <div class="metric-box-value mono" id="sim-balance-val">-</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-box-label">Attendance</div>
+              <div class="metric-box-value mono" id="sim-attend-val">-</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-box-label">Pantry Value</div>
+              <div class="metric-box-value mono" id="sim-pantry-val">-</div>
+            </div>
+          </div>
+          <div id="sim-meters" class="stack-col" style="gap: 8px;"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Manual Masked Action</h2>
+          <button id="btn-sim-step" class="btn btn-sm btn-primary" type="button">Execute Step</button>
+        </div>
+        <div class="panel-body stack-col" style="gap: 8px;" id="sim-action-form"></div>
+      </div>
+    </div>
+  </div>
+</section>

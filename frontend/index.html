@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student Survival RL — Spatial Graph Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  >
+  <link rel="stylesheet" href="/css/tokens.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div class="brand-titles">
+        <h1>Student Survival RL</h1>
+        <p class="header-subtitle">Spatial-Graph Configurable Framework</p>
+      </div>
+    </div>
+
+    <nav class="primary-tabs" role="tablist" aria-label="Workspace Pages">
+      <a class="tab-button is-active" href="#graph" role="tab" data-tab="graph" aria-selected="true">
+        Spatial Graph
+      </a>
+      <a class="tab-button" href="#config" role="tab" data-tab="config" aria-selected="false">
+        Env &amp; Rules
+      </a>
+      <a class="tab-button" href="#simulation" role="tab" data-tab="simulation" aria-selected="false">
+        Live Sandbox
+      </a>
+      <a class="tab-button" href="#training" role="tab" data-tab="training" aria-selected="false">
+        Training &amp; Runs
+      </a>
+    </nav>
+
+    <div class="header-actions">
+      <select id="global-config-select" class="control-select mono" style="width: 210px;" aria-label="Active Configuration"></select>
+      <button id="btn-global-validate" class="btn btn-sm" type="button">Validate</button>
+      <button id="btn-global-save" class="btn btn-primary btn-sm" type="button">Save Local</button>
+      <span id="global-status-pill" class="status-pill">
+        <span id="global-status-dot" class="status-dot"></span>
+        <span id="global-status-text">Loading...</span>
+      </span>
+    </div>
+  </header>
+
+  <main id="workspace-main" class="workspace-main"></main>
+
+  <div id="toast-banner" class="toast-banner" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

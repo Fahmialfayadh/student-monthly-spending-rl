@@ -1,0 +1,47 @@
+<section id="panel-config" class="tab-panel" role="tabpanel" hidden>
+  <div class="stack-col">
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Local YAML Sync &amp; Save</h2>
+          <p class="panel-sub">Simpan konfigurasi custom ke configs/custom/*.yaml atau sinkronkan ke env_config.yaml</p>
+        </div>
+        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <input id="save-config-name" class="control-input mono" style="width: 190px;" placeholder="my_campus_config">
+          <label class="checkbox-row" data-tooltip="Jika dicentang, file env_config.yaml di root repo ikut diperbarui agar langsung dipakai saat training notebook/CLI.">
+            <input id="save-set-active" type="checkbox">
+            <span class="tooltip-trigger">Sync env_config.yaml</span>
+          </label>
+          <button id="btn-save-custom" class="btn btn-primary btn-sm" type="button">Save YAML</button>
+          <button id="btn-export-yaml" class="btn btn-sm" type="button">Download YAML</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="config-meta-bar" class="mono" style="font-size: 11px; color: var(--ink-secondary);"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>External Food Catalog</h2>
+          <p class="panel-sub">Kelola daftar tempat makan / kantin / delivery yang bisa dipilih di tiap lokasi pada Spatial Graph</p>
+        </div>
+        <button id="btn-add-food" class="btn btn-sm" type="button">+ Add Food Option</button>
+      </div>
+      <div class="panel-body" id="external-foods-container"></div>
+    </div>
+
+    <div class="config-sections" id="env-config-sections"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Weekly Class Schedule</h2>
+          <p class="panel-sub">Klik sel untuk toggle jadwal kuliah per hari dan slot waktu</p>
+        </div>
+      </div>
+      <div class="panel-body" id="weekly-schedule-container"></div>
+    </div>
+  </div>
+</section>

@@ -576,3 +576,19 @@ def test_typed_schema_training_api_runs_and_autostep(
     r_rst = client.post(f"/sim/sessions/{sid}/reset", json={"seed": 99})
     assert r_rst.status_code == 200 and r_rst.json()["graph_state"]["current_step"] == 0
     client.delete(f"/sim/sessions/{sid}")
+
+
+def test_frontend_static_pages_served() -> None:
+    client = TestClient(app)
+    for path in (
+        "/",
+        "/css/tokens.css",
+        "/css/app.css",
+        "/js/main.js",
+        "/partials/graph_studio.html",
+        "/partials/env_config.html",
+        "/partials/simulation.html",
+        "/partials/training.html",
+    ):
+        resp = client.get(path)
+        assert resp.status_code == 200, f"Failed serving {path}"

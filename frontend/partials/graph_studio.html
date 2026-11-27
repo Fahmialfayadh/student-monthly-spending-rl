@@ -1,0 +1,147 @@
+<section id="panel-graph" class="tab-panel" role="tabpanel">
+  <div class="split-layout">
+    <!-- Left: Interactive Colored Spatial Graph Canvas -->
+    <div class="panel">
+      <div class="graph-toolbar">
+        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;">
+          <button id="btn-add-node" class="btn btn-sm btn-primary" type="button">+ Add Location</button>
+          <button
+            id="btn-connect-mode"
+            class="btn btn-sm"
+            type="button"
+            data-tooltip="Aktifkan lalu klik 2 lokasi di peta untuk membuat rute penghubung secara otomatis sesuai jarak posisi peta."
+          >
+            Connect 2 Nodes
+          </button>
+          <label
+            class="checkbox-row"
+            style="margin-left: 6px;"
+            data-tooltip="Saat aktif, menggeser lokasi di peta otomatis memperbarui jarak (km) semua rute yang terhubung."
+          >
+            <input id="chk-auto-distance" type="checkbox" checked>
+            <span class="tooltip-trigger">Auto-Sync Distance</span>
+          </label>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <label
+            for="graph-scale-select"
+            class="field-label tooltip-trigger"
+            data-tooltip="Skala peta untuk menghitung jarak (km) dari posisi node saat digeser."
+          >
+            Map Scale
+          </label>
+          <select id="graph-scale-select" class="control-select mono" style="width: 128px;">
+            <option value="80">80 px = 1 km</option>
+            <option value="120" selected>120 px = 1 km</option>
+            <option value="180">180 px = 1 km</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="graph-mode-banner" class="info-box" style="border-radius: 0; border-left: none; border-right: none; border-top: none;" hidden></div>
+
+      <div class="graph-stage">
+        <svg id="spatial-graph-svg" class="graph-svg" viewBox="0 0 820 500"></svg>
+        <div class="graph-legend">
+          <span class="legend-item"><span class="legend-dot" style="background: var(--graph-home);"></span>Home / Kos</span>
+          <span class="legend-item"><span class="legend-dot" style="background: var(--graph-campus);"></span>Kampus / Hub</span>
+          <span class="legend-item"><span class="legend-dot" style="background: var(--graph-third-place);"></span>Kafe / Third Place</span>
+          <span class="legend-item"><span class="legend-dot" style="background: var(--graph-custom);"></span>Custom</span>
+          <span class="legend-item">--- Walk</span>
+          <span class="legend-item">─── Motorized</span>
+        </div>
+        <div class="graph-scale-bar mono">
+          <div id="scale-bar-line" class="scale-bar-line" style="width: 120px;"></div>
+          <span id="scale-bar-label">1.0 km</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Node/Edge Inspector + Route Simulator + Walk Policy -->
+    <div class="stack-col">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2 id="inspector-title">Inspector</h2>
+            <p id="inspector-subtitle" class="panel-sub">Klik lokasi atau garis rute di peta untuk mengubah aturannya</p>
+          </div>
+          <button id="btn-delete-selected" class="btn btn-sm btn-danger" type="button" hidden>Delete</button>
+        </div>
+        <div id="inspector-body" class="panel-body">
+          <p class="panel-sub">
+            Geser titik lokasi di peta untuk mengubah jarak antar-tempat secara langsung, atau klik lokasi/rute untuk mengatur mood, belajar, dan tarif transport.
+          </p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Walk Rules &amp; Route Simulator</h2>
+            <p class="panel-sub">Uji rute Dijkstra dan estimasi ongkos dari dua lokasi pilihan</p>
+          </div>
+        </div>
+        <div class="panel-body stack-col" style="gap: 10px;">
+          <div class="field-row-3">
+            <div class="field-group">
+              <label for="walk-pref-select" class="tooltip-trigger" data-tooltip="balanced: sesuai fastest/cheapest. prefer_walk: utamakan jalan kaki dalam batas jarak. avoid_walk: hindari jalan kaki jika ada rute kendaraan.">Walk Preference</label>
+              <select id="walk-pref-select" class="control-select">
+                <option value="balanced">balanced</option>
+                <option value="prefer_walk">prefer_walk</option>
+                <option value="avoid_walk">avoid_walk</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="walk-max-km" class="tooltip-trigger" data-tooltip="Batas maksimal jarak jalan kaki saat cerah. Rute jalan kaki di atas batas ini otomatis dilewati. Isi 0 untuk melarang jalan kaki, kosongkan untuk tanpa batas.">Max Walk (km)</label>
+              <input id="walk-max-km" class="control-input mono" type="number" min="0" step="0.1" placeholder="unlimited">
+            </div>
+            <div class="field-group">
+              <label for="walk-max-rain-km" class="tooltip-trigger" data-tooltip="Batas maksimal jalan kaki khusus saat hujan (misal 0.5 km atau 0 km agar agen naik kendaraan saat hujan).">Rain Max Walk (km)</label>
+              <input id="walk-max-rain-km" class="control-input mono" type="number" min="0" step="0.1" placeholder="same">
+            </div>
+          </div>
+
+          <div style="border-top: 1px solid var(--border-subtle); padding-top: 10px;" class="stack-col">
+            <div class="field-label">Simulasi Perjalanan (Route Tester)</div>
+            <div class="field-row-3">
+              <div class="field-group">
+                <label for="preview-src">Dari Lokasi</label>
+                <select id="preview-src" class="control-select mono"></select>
+              </div>
+              <div class="field-group">
+                <label for="preview-dst">Ke Lokasi</label>
+                <select id="preview-dst" class="control-select mono"></select>
+              </div>
+              <div class="field-group">
+                <label for="preview-pref" class="tooltip-trigger" data-tooltip="fastest: minim kelelahan/waktu. cheapest: ongkos termurah (bisa memilih transit + jalan kaki selama dalam Max Walk).">Mode Rute</label>
+                <select id="preview-pref" class="control-select">
+                  <option value="fastest">fastest (cepat)</option>
+                  <option value="cheapest">cheapest (hemat)</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-row-3" style="align-items: end;">
+              <div class="field-group">
+                <label for="preview-tariff">Jam / Tarif</label>
+                <select id="preview-tariff" class="control-select">
+                  <option value="normal">Normal</option>
+                  <option value="peak">Jam Sibuk (Peak)</option>
+                </select>
+              </div>
+              <label class="checkbox-row" style="padding-bottom: 6px;">
+                <input id="preview-rain" type="checkbox">
+                <span>Simulasi Hujan</span>
+              </label>
+              <button id="btn-preview-route" class="btn btn-sm btn-primary" type="button">Hitung Rute</button>
+            </div>
+          </div>
+
+          <div id="route-preview-output" class="info-box mono">
+            Pilih lokasi asal &amp; tujuan lalu klik Hitung Rute untuk melihat jalur terpilih, jarak jalan kaki, dan estimasi tarif IDR.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
