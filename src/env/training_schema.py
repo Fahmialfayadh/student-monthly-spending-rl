@@ -67,7 +67,7 @@ class TrainingScheduleConfig(BaseModel):
 class TrainingProfileConfig(BaseModel):
     """Konfigurasi lengkap training RL (PPO + Behavior Cloning + Schedule)."""
 
-    experiment_name: str = Field(default="maskable_ppo_experiment", min_length=1, max_length=64)
+    experiment_name: str = Field(default="student_agent", min_length=1, max_length=64)
     runs_root_dir: str = "runs"
     ppo: PPOHyperparamsConfig = Field(default_factory=PPOHyperparamsConfig)
     bc: BehaviorCloningConfig = Field(default_factory=BehaviorCloningConfig)

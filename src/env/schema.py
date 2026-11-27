@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StepDefinitionConfig(BaseModel):
@@ -56,6 +56,7 @@ class NutritionPerUnitConfig(BaseModel):
 
 
 class IngredientConfig(BaseModel):
+    label: str | None = None
     pack_price_idr: float = Field(gt=0.0)
     units_per_pack: int = Field(ge=1)
     shelf_life_steps: int = Field(ge=1)
@@ -63,11 +64,26 @@ class IngredientConfig(BaseModel):
 
 
 class InitialPantryConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     rice: int = Field(default=0, ge=0)
     egg: int = Field(default=0, ge=0)
     chicken: int = Field(default=0, ge=0)
     tempe: int = Field(default=0, ge=0)
     meal_prep: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_extra_stocks(self) -> "InitialPantryConfig":
+        if self.model_extra:
+            for key, val in list(self.model_extra.items()):
+                try:
+                    ival = int(val)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"initial_pantry.{key} harus berupa bilangan bulat >= 0.") from exc
+                if ival < 0:
+                    raise ValueError(f"initial_pantry.{key} tidak boleh negatif.")
+                self.model_extra[key] = ival
+        return self
 
 
 class MealCompositionRulesConfig(BaseModel):
@@ -312,6 +328,7 @@ class EdgeRouteConfig(BaseModel):
     source: str
     target: str
     bidirectional: bool = True
+    lock_distance: bool = False
     mode: Literal["walk", "ojol", "goride", "gocar", "public_transit", "personal", "custom"] = "ojol"
     distance_km: float = Field(gt=0.0)
     pricing: EdgePricingConfig = Field(default_factory=EdgePricingConfig)

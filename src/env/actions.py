@@ -16,7 +16,11 @@ from src.env.schema import (
 from src.env.world_graph import RoutePreference, WorldGraph
 
 
-def parse_action_vector(action, action_dimensions: dict[str, list]) -> dict[str, object]:
+def parse_action_vector(
+    action,
+    action_dimensions: dict[str, list],
+    pantry: PantryManager | None = None,
+) -> dict[str, object]:
     """Mengubah vektor integer MultiDiscrete (6 elemen) menjadi dict nama aksi yang jelas."""
     (
         activity_index,
@@ -27,15 +31,26 @@ def parse_action_vector(action, action_dimensions: dict[str, list]) -> dict[str,
         grocery_bundle_index,
     ) = [int(value) for value in action]
 
+    cook_quantities = (
+        pantry.decode_cook_combo_dict(cook_combo_index)
+        if pantry is not None
+        else PantryManager.decode_cook_combo(cook_combo_index)
+    )
+    grocery_flags = (
+        pantry.decode_grocery_bundle_dict(grocery_bundle_index)
+        if pantry is not None
+        else PantryManager.decode_grocery_bundle(grocery_bundle_index)
+    )
+
     return {
         "activity": action_dimensions["activity"][activity_index],
         "route": action_dimensions["route"][route_index],
         "meal_mode": action_dimensions["meal_mode"][meal_mode_index],
         "cook_combo_index": cook_combo_index,
-        "cook_quantities": PantryManager.decode_cook_combo(cook_combo_index),
+        "cook_quantities": cook_quantities,
         "bring_bekal": bool(action_dimensions["bring_bekal"][bring_bekal_index]),
         "grocery_bundle_index": grocery_bundle_index,
-        "grocery_flags": PantryManager.decode_grocery_bundle(grocery_bundle_index),
+        "grocery_flags": grocery_flags,
     }
 
 
@@ -538,8 +553,8 @@ def execute_activity_action(
             ingredients_config = pantry_config["ingredients"]
             total_bundle_cost = sum(
                 float(ingredients_config[name]["pack_price_idr"])
-                for name in PantryManager.INGREDIENT_NAMES
-                if requested_grocery_flags[name]
+                for name in pantry_manager.ingredient_names
+                if requested_grocery_flags.get(name, False)
             )
             shopping_config = pantry_config["grocery_shopping"]
             shopping_transport_cost = float(shopping_config["transport_cost_idr"])
@@ -548,8 +563,8 @@ def execute_activity_action(
                 total_bundle_cost + shopping_transport_cost
             ):
                 purchased_items: list[str] = []
-                for ingredient_name in PantryManager.INGREDIENT_NAMES:
-                    if not requested_grocery_flags[ingredient_name]:
+                for ingredient_name in pantry_manager.ingredient_names:
+                    if not requested_grocery_flags.get(ingredient_name, False):
                         continue
                     pack_price_idr = float(ingredients_config[ingredient_name]["pack_price_idr"])
                     finance_manager.pay(pack_price_idr, category="grocery")
@@ -607,7 +622,7 @@ def build_action_masks(
 
     # 1. Activity mask (dinamis sesuai jumlah aktivitas)
     cheapest_bundle_price = min(
-        pantry.get_grocery_bundle_cost_idr(i) for i in range(len(PantryManager.GROCERY_BUNDLES))
+        pantry.get_grocery_bundle_cost_idr(i) for i in range(len(pantry.grocery_bundles))
     )
     activity_mask: list[bool] = []
     for act_id in activity_order:
@@ -669,16 +684,16 @@ def build_action_masks(
     # 2. Route preference mask (fastest, cheapest)
     route_mask = [True for _ in route_preferences]
 
-    # 3. Cook combo mask (18)
+    # 3. Cook combo mask (dinamis mengikuti bahan standar + custom)
     cook_combo_mask = [
-        pantry.has_enough_ingredients(PantryManager.decode_cook_combo(i), batch_multiplier=1)
-        for i in range(len(PantryManager.COOK_COMBOS))
+        pantry.has_enough_ingredients(pantry.decode_cook_combo_dict(i), batch_multiplier=1)
+        for i in range(len(pantry.cook_combos))
     ]
     has_any_cook_combo = any(cook_combo_mask)
     min_batch_size = int(cooking_gates["meal_prep_min_batch_size"])
     has_any_prep_combo = any(
-        pantry.max_portions_possible(PantryManager.decode_cook_combo(i)) >= min_batch_size
-        for i in range(len(PantryManager.COOK_COMBOS))
+        pantry.max_portions_possible(pantry.decode_cook_combo_dict(i)) >= min_batch_size
+        for i in range(len(pantry.cook_combos))
     )
     if not has_any_cook_combo:
         cook_combo_mask[0] = True
@@ -755,7 +770,7 @@ def build_action_masks(
     grocery_commute_cost = grocery_path.min_fare_idr if grocery_path is not None else float("inf")
     grocery_bundle_mask = [
         finance.can_afford(pantry.get_grocery_bundle_cost_idr(i) + grocery_commute_cost)
-        for i in range(len(PantryManager.GROCERY_BUNDLES))
+        for i in range(len(pantry.grocery_bundles))
     ]
     if not any(grocery_bundle_mask):
         grocery_bundle_mask[0] = True

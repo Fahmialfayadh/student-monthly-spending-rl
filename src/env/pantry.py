@@ -1,8 +1,8 @@
 class PantryManager:
     """
-    Mengelola inventaris dapur berbasis Smart-FIFO (bahan mentah, meal prep kulkas,
-    serta kotak bekal), valuasi stok dapur (IDR), racikan lauk mandiri,
-    kejenuhan menu berbasis window, dan penuaan stok.
+    Mengelola inventaris dapur berbasis Smart-FIFO (bahan mentah standar maupun custom,
+    meal prep kulkas, serta kotak bekal), valuasi stok dapur (IDR), racikan lauk/minuman
+    mandiri, kejenuhan menu berbasis window, dan penuaan stok.
     """
 
     INGREDIENT_NAMES = ("rice", "egg", "chicken", "tempe")
@@ -46,10 +46,57 @@ class PantryManager:
         self.boredom_config = pantry_config["boredom_mechanics"]
         self.external_food_ids = tuple(external_food_ids)
 
+        # Keep 4 standard ingredients first for backward-compatible indices, then any custom ingredients
+        extra_names = [
+            name for name in self.ingredients_config.keys() if name not in self.INGREDIENT_NAMES
+        ]
+        self.extra_ingredient_names: tuple[str, ...] = tuple(extra_names)
+        self.ingredient_names: tuple[str, ...] = tuple(
+            [n for n in self.INGREDIENT_NAMES if n in self.ingredients_config] + extra_names
+        )
+
+        # Dynamic cook combos: 18 standard combos + standalone & rice-paired combos for each custom ingredient
+        self.cook_combos: list[dict[str, int]] = []
+        for rice, egg, chicken, tempe in self.COOK_COMBOS:
+            combo = {name: 0 for name in self.ingredient_names}
+            combo["rice"] = rice
+            combo["egg"] = egg
+            combo["chicken"] = chicken
+            combo["tempe"] = tempe
+            self.cook_combos.append(combo)
+        for extra in self.extra_ingredient_names:
+            solo = {name: 0 for name in self.ingredient_names}
+            solo[extra] = 1
+            self.cook_combos.append(solo)
+            if "rice" in self.ingredients_config:
+                with_rice = {name: 0 for name in self.ingredient_names}
+                with_rice["rice"] = 1
+                with_rice[extra] = 1
+                self.cook_combos.append(with_rice)
+
+        # Dynamic grocery bundles: 15 standard bundles + solo & rice-paired bundle for each custom ingredient
+        self.grocery_bundles: list[dict[str, bool]] = []
+        for rice, egg, chicken, tempe in self.GROCERY_BUNDLES:
+            bundle = {name: False for name in self.ingredient_names}
+            bundle["rice"] = bool(rice)
+            bundle["egg"] = bool(egg)
+            bundle["chicken"] = bool(chicken)
+            bundle["tempe"] = bool(tempe)
+            self.grocery_bundles.append(bundle)
+        for extra in self.extra_ingredient_names:
+            solo_b = {name: False for name in self.ingredient_names}
+            solo_b[extra] = True
+            self.grocery_bundles.append(solo_b)
+            if "rice" in self.ingredients_config:
+                rice_b = {name: False for name in self.ingredient_names}
+                rice_b["rice"] = True
+                rice_b[extra] = True
+                self.grocery_bundles.append(rice_b)
+
         self.unit_prices_idr: dict[str, float] = {
             name: float(self.ingredients_config[name]["pack_price_idr"])
             / float(self.ingredients_config[name]["units_per_pack"])
-            for name in self.INGREDIENT_NAMES
+            for name in self.ingredient_names
         }
 
         self.ingredient_batches: dict[str, list[dict[str, int]]] = {}
@@ -62,8 +109,13 @@ class PantryManager:
 
         self.reset()
 
+    def get_ingredient_label(self, name: str) -> str:
+        spec = self.ingredients_config.get(name, {})
+        lbl = spec.get("label")
+        return str(lbl).strip() if lbl else str(name)
+
     def reset(self) -> None:
-        self.ingredient_batches = {name: [] for name in self.INGREDIENT_NAMES}
+        self.ingredient_batches = {name: [] for name in self.ingredient_names}
         self.meal_prep_batches = []
         self.packed_lunch_portions = []
         self.last_meal_signature = None
@@ -72,7 +124,7 @@ class PantryManager:
         self.total_spoiled_units = 0
 
         initial_pantry = self.pantry_config["initial_pantry"]
-        for ingredient_name in self.INGREDIENT_NAMES:
+        for ingredient_name in self.ingredient_names:
             initial_quantity = int(initial_pantry.get(ingredient_name, 0))
             if initial_quantity > 0:
                 shelf_life_steps = int(self.ingredients_config[ingredient_name]["shelf_life_steps"])
@@ -84,9 +136,9 @@ class PantryManager:
         initial_meal_prep_portions = int(initial_pantry.get("meal_prep", 0))
         if initial_meal_prep_portions > 0:
             default_cost = (
-                self.unit_prices_idr["rice"]
-                + self.unit_prices_idr["egg"]
-                + self.unit_prices_idr["tempe"]
+                self.unit_prices_idr.get("rice", 0.0)
+                + self.unit_prices_idr.get("egg", 0.0)
+                + self.unit_prices_idr.get("tempe", 0.0)
             )
             self.meal_prep_batches.append({
                 "portions": initial_meal_prep_portions,
@@ -113,23 +165,30 @@ class PantryManager:
             "tempe": bool(tempe),
         }
 
+    def decode_cook_combo_dict(self, combo_index: int) -> dict[str, int]:
+        return dict(self.cook_combos[int(combo_index)])
+
+    def decode_grocery_bundle_dict(self, bundle_index: int) -> dict[str, bool]:
+        return dict(self.grocery_bundles[int(bundle_index)])
+
     def get_grocery_bundle_cost_idr(self, bundle_index: int) -> float:
-        flags = self.decode_grocery_bundle(bundle_index)
+        flags = self.decode_grocery_bundle_dict(bundle_index)
         return sum(
             float(self.ingredients_config[name]["pack_price_idr"])
-            for name in self.INGREDIENT_NAMES
-            if flags[name]
+            for name in self.ingredient_names
+            if flags.get(name, False)
         )
 
     def compute_combo_ingredient_value_idr(self, quantities: dict[str, int]) -> float:
         return sum(
-            self.unit_prices_idr[name] * int(quantities[name]) for name in self.INGREDIENT_NAMES
+            self.unit_prices_idr[name] * int(quantities.get(name, 0))
+            for name in self.ingredient_names
         )
 
     def get_inventory_value_idr(self) -> float:
         raw_value = sum(
             self.get_ingredient_total_units(name) * self.unit_prices_idr[name]
-            for name in self.INGREDIENT_NAMES
+            for name in self.ingredient_names
         )
         prep_value = sum(
             int(batch["portions"]) * float(batch.get("portion_value_idr", 0.0))
@@ -141,7 +200,7 @@ class PantryManager:
         return float(raw_value + prep_value + bekal_value)
 
     def get_ingredient_total_units(self, ingredient_name: str) -> int:
-        return sum(batch["quantity"] for batch in self.ingredient_batches[ingredient_name])
+        return sum(batch["quantity"] for batch in self.ingredient_batches.get(ingredient_name, []))
 
     def get_meal_prep_total_portions(self) -> int:
         return sum(int(batch["portions"]) for batch in self.meal_prep_batches)
@@ -150,10 +209,10 @@ class PantryManager:
         return len(self.packed_lunch_portions)
 
     def get_total_raw_units(self) -> int:
-        return sum(self.get_ingredient_total_units(name) for name in self.INGREDIENT_NAMES)
+        return sum(self.get_ingredient_total_units(name) for name in self.ingredient_names)
 
     def get_min_ingredient_shelf_life(self, ingredient_name: str) -> int:
-        batches = self.ingredient_batches[ingredient_name]
+        batches = self.ingredient_batches.get(ingredient_name, [])
         if not batches:
             return 0
         return min(batch["remaining_shelf_life_steps"] for batch in batches)
@@ -164,14 +223,10 @@ class PantryManager:
         return min(int(batch["remaining_shelf_life_steps"]) for batch in self.meal_prep_batches)
 
     def get_stock_summary(self) -> dict[str, int]:
-        return {
-            "rice": self.get_ingredient_total_units("rice"),
-            "egg": self.get_ingredient_total_units("egg"),
-            "chicken": self.get_ingredient_total_units("chicken"),
-            "tempe": self.get_ingredient_total_units("tempe"),
-            "meal_prep": self.get_meal_prep_total_portions(),
-            "packed_lunch": self.get_packed_lunch_total_portions(),
-        }
+        summary = {name: self.get_ingredient_total_units(name) for name in self.ingredient_names}
+        summary["meal_prep"] = self.get_meal_prep_total_portions()
+        summary["packed_lunch"] = self.get_packed_lunch_total_portions()
+        return summary
 
     def get_recent_meal_count(self, meal_signature: str) -> int:
         return sum(1 for sig in self.recent_meal_signatures if sig == meal_signature)
@@ -197,6 +252,7 @@ class PantryManager:
             "last_meal_had_egg",
             "last_meal_had_chicken",
             "last_meal_had_tempe",
+            *[f"last_meal_had_{extra}" for extra in self.extra_ingredient_names],
             *[f"last_meal_was_{fid}" for fid in self.external_food_ids],
             "last_meal_was_plain_rice",
         ]
@@ -210,6 +266,8 @@ class PantryManager:
             1.0 if "chicken" in parts else 0.0,
             1.0 if "tempe" in parts else 0.0,
         ]
+        for extra in self.extra_ingredient_names:
+            flags.append(1.0 if extra in parts else 0.0)
         for food_id in self.external_food_ids:
             flags.append(1.0 if signature == food_id else 0.0)
         flags.append(1.0 if signature == "plain_rice" else 0.0)
@@ -217,8 +275,8 @@ class PantryManager:
 
     def max_portions_possible(self, requested_quantities: dict[str, int]) -> int:
         limits: list[int] = []
-        for name in self.INGREDIENT_NAMES:
-            qty = int(requested_quantities[name])
+        for name in self.ingredient_names:
+            qty = int(requested_quantities.get(name, 0))
             if qty > 0:
                 limits.append(self.get_ingredient_total_units(name) // qty)
         return min(limits) if limits else 0
@@ -230,7 +288,7 @@ class PantryManager:
 
     def add_grocery_pack(self, ingredient_name: str) -> None:
         ingredient_profile = self.ingredients_config[ingredient_name]
-        self.ingredient_batches[ingredient_name].append({
+        self.ingredient_batches.setdefault(ingredient_name, []).append({
             "quantity": int(ingredient_profile["units_per_pack"]),
             "remaining_shelf_life_steps": int(ingredient_profile["shelf_life_steps"]),
         })
@@ -245,7 +303,7 @@ class PantryManager:
 
             remaining_to_consume = units_to_consume
             updated_batches: list[dict[str, int]] = []
-            for batch in self.ingredient_batches[ingredient_name]:
+            for batch in self.ingredient_batches.get(ingredient_name, []):
                 if remaining_to_consume <= 0:
                     updated_batches.append(batch)
                     continue
@@ -342,9 +400,9 @@ class PantryManager:
     def age_and_spoil_batches(self) -> int:
         spoiled_units_this_step = 0
 
-        for ingredient_name in self.INGREDIENT_NAMES:
+        for ingredient_name in self.ingredient_names:
             surviving_batches: list[dict[str, int]] = []
-            for batch in self.ingredient_batches[ingredient_name]:
+            for batch in self.ingredient_batches.get(ingredient_name, []):
                 batch["remaining_shelf_life_steps"] -= 1
                 if batch["remaining_shelf_life_steps"] <= 0:
                     spoiled_units_this_step += batch["quantity"]
@@ -374,8 +432,8 @@ class PantryManager:
         total_mood_delta = 0.0
         active_side_dishes: list[str] = []
 
-        for ingredient_name in self.INGREDIENT_NAMES:
-            quantity = int(ingredient_quantities[ingredient_name])
+        for ingredient_name in self.ingredient_names:
+            quantity = int(ingredient_quantities.get(ingredient_name, 0))
             if quantity <= 0:
                 continue
             nutrition = self.ingredients_config[ingredient_name]["nutrition_per_unit"]
@@ -385,7 +443,7 @@ class PantryManager:
             if ingredient_name != "rice":
                 active_side_dishes.append(ingredient_name)
 
-        if len(active_side_dishes) == 0 and int(ingredient_quantities["rice"]) > 0:
+        if len(active_side_dishes) == 0 and int(ingredient_quantities.get("rice", 0)) > 0:
             total_mood_delta += float(self.composition_rules["plain_rice_only_mood_penalty"])
             meal_signature = "plain_rice"
         else:

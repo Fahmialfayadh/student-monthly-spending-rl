@@ -100,18 +100,18 @@ class StudentLifeEnv(gym.Env):
             "activity": list(self.activity_names),
             "route": list(self.route_names),
             "meal_mode": list(self.meal_mode_names),
-            "cook_combo": list(range(len(PantryManager.COOK_COMBOS))),
+            "cook_combo": list(range(len(self.pantry.cook_combos))),
             "bring_bekal": [0, 1],
-            "grocery_bundle": list(range(len(PantryManager.GROCERY_BUNDLES))),
+            "grocery_bundle": list(range(len(self.pantry.grocery_bundles))),
         }
 
         self.action_space = spaces.MultiDiscrete([
             len(self.activity_names),
             len(self.route_names),
             len(self.meal_mode_names),
-            len(PantryManager.COOK_COMBOS),
+            len(self.pantry.cook_combos),
             2,
-            len(PantryManager.GROCERY_BUNDLES),
+            len(self.pantry.grocery_bundles),
         ])
 
         self.observation_feature_names = self._build_observation_feature_names()
@@ -166,11 +166,13 @@ class StudentLifeEnv(gym.Env):
             "egg_stock_units",
             "chicken_stock_units",
             "tempe_stock_units",
+            *[f"{name}_stock_units" for name in self.pantry.extra_ingredient_names],
             "meal_prep_stock_portions",
             "packed_lunch_stock_portions",
             "min_shelf_life_egg_steps",
             "min_shelf_life_chicken_steps",
             "min_shelf_life_tempe_steps",
+            *[f"min_shelf_life_{name}_steps" for name in self.pantry.extra_ingredient_names],
             "min_shelf_life_meal_prep_steps",
             "has_non_repeating_meal_prep",
             "has_non_repeating_packed_lunch",
@@ -216,15 +218,27 @@ class StudentLifeEnv(gym.Env):
         return export_world_json_schema()
 
     def get_graph_state(self) -> dict[str, Any]:
-        """Snapshot status lokasi, biometrik, stok, dan graf untuk inspeksi API/UI."""
+        """Snapshot status lokasi, waktu, biometrik, stok, dan graf untuk inspeksi API/UI."""
         node = self.world_graph.get_node(self.current_node_id)
+        current_day, _, step_in_day, day_name = self.academics.get_time_context(self.current_step)
+        step_def = self.academics.get_step_definition(step_in_day)
         return {
             "current_step": self.current_step,
+            "total_steps": self.total_steps,
+            "episode_days": int(self.world_config.environment.episode_days),
+            "current_day": current_day,
+            "day_name": day_name,
+            "step_in_day": step_in_day,
+            "time_slot_name": str(step_def.get("name", f"slot_{step_in_day}")),
+            "time_slot_hours": str(step_def.get("hours", "")),
+            "is_class_scheduled_now": self.academics.is_class_scheduled(day_name, step_in_day),
             "current_node_id": self.current_node_id,
             "current_node_label": node.label,
             "current_zone": node.zone,
             "is_raining": self.current_is_raining,
             "balance_idr": self.finance.balance_idr,
+            "initial_operational_budget_idr": self.finance.initial_operational_budget_idr,
+            "spending_by_category_idr": self.finance.get_spending_summary(),
             "biometrics": {
                 "energy": self.biometrics.energy,
                 "hunger": self.biometrics.hunger,
@@ -236,7 +250,38 @@ class StudentLifeEnv(gym.Env):
         }
 
     def get_action_labels(self) -> dict[str, list[Any]]:
-        return dict(self.action_dimensions)
+        cook_labels = [
+            " + ".join(
+                f"{qty} {self.pantry.get_ingredient_label(name)}"
+                for name, qty in self.pantry.decode_cook_combo_dict(i).items()
+                if qty > 0
+            )
+            for i in range(len(self.pantry.cook_combos))
+        ]
+        grocery_labels = [
+            "Beli: "
+            + ", ".join(
+                self.pantry.get_ingredient_label(name)
+                for name, flag in self.pantry.decode_grocery_bundle_dict(i).items()
+                if flag
+            )
+            for i in range(len(self.pantry.grocery_bundles))
+        ]
+        return {
+            "activity": [self.activity_specs[aid].label for aid in self.activity_names],
+            "route": ["Cepat (minim lelah)", "Hemat (ongkos terendah)"],
+            "meal_mode": [
+                "Tidak makan (skip)",
+                "Masak segar",
+                "Meal prep (batch)",
+                "Panaskan / makan bekal",
+                "Makan luar hemat",
+                "Makan luar variasi",
+            ],
+            "cook_combo": cook_labels,
+            "bring_bekal": ["Tidak bawa bekal", "Bawa bekal"],
+            "grocery_bundle": grocery_labels,
+        }
 
     def _roll_rain_for_step(self, step_index: int) -> bool:
         _, _, step_in_day, _ = self.academics.get_time_context(step_index)
@@ -312,7 +357,7 @@ class StudentLifeEnv(gym.Env):
                 step_events["new_daily_task_added"] = True
 
         # 2. Bongkar aksi & cek soft mood burnout
-        parsed_action = parse_action_vector(action, self.action_dimensions)
+        parsed_action = parse_action_vector(action, self.action_dimensions, pantry=self.pantry)
         is_stress_burned_out = self.biometrics.is_stress_burned_out()
         effective_activity_id = str(parsed_action["activity"])
         activity_spec = self.activity_specs[effective_activity_id]
@@ -632,11 +677,19 @@ class StudentLifeEnv(gym.Env):
                 float(self.pantry.get_ingredient_total_units("egg")),
                 float(self.pantry.get_ingredient_total_units("chicken")),
                 float(self.pantry.get_ingredient_total_units("tempe")),
+                *[
+                    float(self.pantry.get_ingredient_total_units(name))
+                    for name in self.pantry.extra_ingredient_names
+                ],
                 float(self.pantry.get_meal_prep_total_portions()),
                 float(self.pantry.get_packed_lunch_total_portions()),
                 float(self.pantry.get_min_ingredient_shelf_life("egg")),
                 float(self.pantry.get_min_ingredient_shelf_life("chicken")),
                 float(self.pantry.get_min_ingredient_shelf_life("tempe")),
+                *[
+                    float(self.pantry.get_min_ingredient_shelf_life(name))
+                    for name in self.pantry.extra_ingredient_names
+                ],
                 float(self.pantry.get_min_meal_prep_shelf_life()),
                 1.0 if self.pantry.has_non_repeating_meal_prep() else 0.0,
                 1.0 if self.pantry.has_non_repeating_packed_lunch() else 0.0,
