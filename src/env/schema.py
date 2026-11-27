@@ -64,6 +64,11 @@ class BiometricsAndPsychologyConfig(BaseModel):
 
 
 class WalkPhysicsConfig(BaseModel):
+    walk_preference: Literal["prefer_walk", "balanced", "avoid_walk"] = "balanced"
+    max_walk_distance_km: float | None = Field(default=None, ge=0.0)
+    max_walk_distance_rain_km: float | None = Field(default=None, ge=0.0)
+    prefer_walk_score_multiplier: float = Field(default=0.25, gt=0.0, le=1.0)
+    avoid_walk_penalty_idr: float = Field(default=50_000.0, ge=0.0)
     energy_cost_per_km_cool: float = Field(default=3.3333, ge=0.0)
     energy_cost_per_km_midday: float = Field(default=10.0, ge=0.0)
     mood_delta_per_km_cool: float = Field(default=-1.3333)

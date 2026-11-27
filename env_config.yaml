@@ -167,7 +167,11 @@ external_foods:
 mobility_and_climate:
   heat_sensitivity: 0.95
   walk_physics:
-    # 1.5 km = 5.0 energy cool, 15.0 energy midday, -2.0 mood cool, -12.0 mood midday, +10.0 rain energy, -8.0 rain mood
+    # Preferensi jalan kaki & batas jarak tempuh jalan kaki user-configurable
+    walk_preference: balanced
+    max_walk_distance_km: 2.0
+    max_walk_distance_rain_km: 2.0
+    # Contoh: 1.5 km = 5.0 energy cool, 15.0 energy midday, -2.0 mood cool, -12.0 mood midday, +10.0 rain energy, -8.0 rain mood
     energy_cost_per_km_cool: 3.333333
     energy_cost_per_km_midday: 10.0
     mood_delta_per_km_cool: -1.333333

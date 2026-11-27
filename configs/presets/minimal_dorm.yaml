@@ -151,6 +151,9 @@ external_foods:
 mobility_and_climate:
   heat_sensitivity: 0.90
   walk_physics:
+    walk_preference: balanced
+    max_walk_distance_km: 2.0
+    max_walk_distance_rain_km: 1.5
     energy_cost_per_km_cool: 3.5
     energy_cost_per_km_midday: 9.0
     mood_delta_per_km_cool: -1.5

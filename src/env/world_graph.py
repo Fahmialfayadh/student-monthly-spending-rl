@@ -18,12 +18,13 @@ RoutePreference = Literal["fastest", "cheapest"]
 
 @dataclass(frozen=True)
 class PlannedPath:
-    """Hasil routing graf antara dua lokasi beserta total jarak, tarif, dan beban fisik."""
+    """Hasil routing graf antara dua lokasi beserta total jarak, jarak jalan kaki, tarif, dan beban fisik."""
 
     source_node_id: str
     target_node_id: str
     edges: tuple[EdgeRouteConfig, ...]
     total_distance_km: float
+    walk_distance_km: float
     min_fare_idr: float
     max_fare_idr: float
     total_energy_cost: float
@@ -115,6 +116,8 @@ class WorldGraph:
         )
         avg_fare = 0.5 * (min_fare + max_fare)
         fatigue_penalty = (-energy_delta) + max(0.0, -mood_delta) * 1.25
+        walk_cfg = self.mobility_cfg.walk_physics
+        walk_pref = walk_cfg.walk_preference
 
         if preference == "cheapest":
             # Prioritaskan ongkos terendah, tie-break kelelahan terendah
@@ -122,7 +125,21 @@ class WorldGraph:
         else:
             # "fastest": prioritaskan kelelahan & waktu tempuh terendah, tie-break ongkos
             cost_score = fatigue_penalty * 2000.0 + avg_fare * 0.10
+
+        if edge.mode == "walk":
+            if walk_pref == "prefer_walk":
+                cost_score *= float(walk_cfg.prefer_walk_score_multiplier)
+            elif walk_pref == "avoid_walk":
+                cost_score += float(walk_cfg.avoid_walk_penalty_idr)
         return cost_score, min_fare, max_fare, -energy_delta, mood_delta
+
+    def _effective_walk_limit_km(self, is_raining: bool) -> float | None:
+        walk_cfg = self.mobility_cfg.walk_physics
+        if is_raining and walk_cfg.max_walk_distance_rain_km is not None:
+            return float(walk_cfg.max_walk_distance_rain_km)
+        if walk_cfg.max_walk_distance_km is not None:
+            return float(walk_cfg.max_walk_distance_km)
+        return None
 
     def find_best_path(
         self,
@@ -141,26 +158,31 @@ class WorldGraph:
                 target_node_id=target_node_id,
                 edges=(),
                 total_distance_km=0.0,
+                walk_distance_km=0.0,
                 min_fare_idr=0.0,
                 max_fare_idr=0.0,
                 total_energy_cost=0.0,
                 total_mood_delta=0.0,
             )
 
-        heap: list[tuple[float, int, str, tuple[EdgeRouteConfig, ...], float, float, float, float, float]] = [
-            (0.0, 0, source_node_id, (), 0.0, 0.0, 0.0, 0.0, 0.0)
-        ]
+        walk_limit_km = self._effective_walk_limit_km(is_raining=is_raining)
+        heap: list[
+            tuple[float, int, str, tuple[EdgeRouteConfig, ...], float, float, float, float, float, float]
+        ] = [(0.0, 0, source_node_id, (), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)]
         best_score: dict[str, float] = {}
         counter = 0
 
         while heap:
-            score, _, curr, path_edges, dist, min_f, max_f, e_cost, m_delta = heapq.heappop(heap)
+            score, _, curr, path_edges, dist, walk_dist, min_f, max_f, e_cost, m_delta = heapq.heappop(
+                heap
+            )
             if curr == target_node_id:
                 return PlannedPath(
                     source_node_id=source_node_id,
                     target_node_id=target_node_id,
                     edges=path_edges,
                     total_distance_km=dist,
+                    walk_distance_km=walk_dist,
                     min_fare_idr=min_f,
                     max_fare_idr=max_f,
                     total_energy_cost=e_cost,
@@ -172,6 +194,14 @@ class WorldGraph:
             best_score[curr] = score
 
             for neighbor, edge in self.adjacency[curr]:
+                edge_walk_km = float(edge.distance_km) if edge.mode == "walk" else 0.0
+                new_walk_dist = walk_dist + edge_walk_km
+                if (
+                    walk_limit_km is not None
+                    and edge.mode == "walk"
+                    and new_walk_dist > walk_limit_km + 1e-9
+                ):
+                    continue
                 edge_score, e_min_f, e_max_f, e_ecost, e_mdelta = self._edge_weight(
                     edge, preference, climate, ojol_tariff, is_raining
                 )
@@ -187,6 +217,7 @@ class WorldGraph:
                         neighbor,
                         path_edges + (edge,),
                         dist + float(edge.distance_km),
+                        new_walk_dist,
                         new_min_f,
                         max_f + e_max_f,
                         e_cost + e_ecost,
