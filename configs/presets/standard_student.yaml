@@ -1,0 +1,422 @@
+schema_version: "2.0"
+preset_name: "standard_student"
+
+environment:
+  episode_days: 30
+  steps_per_day: 5
+  total_steps: 150
+  start_day_of_week: 0
+  step_definitions:
+    0: {name: pagi_awal, hours: "06:00-09:30", climate: cool,   ojol_tariff: peak,   hunger_gain: 18.0, rain_prob: 0.10}
+    1: {name: sesi_1,    hours: "09:30-12:15", climate: cool,   ojol_tariff: normal, hunger_gain: 18.0, rain_prob: 0.10}
+    2: {name: sesi_2,    hours: "12:15-15:15", climate: midday, ojol_tariff: normal, hunger_gain: 22.0, rain_prob: 0.15}
+    3: {name: sesi_3,    hours: "15:15-18:30", climate: cool,   ojol_tariff: peak,   hunger_gain: 20.0, rain_prob: 0.25}
+    4: {name: malam,     hours: "18:30-22:30", climate: cool,   ojol_tariff: normal, hunger_gain: 20.0, rain_prob: 0.20}
+
+finance:
+  monthly_budget: 1500000
+  fixed_expenses:
+    mobile_data: 35000
+  alerts:
+    low_balance_threshold: 250000
+  late_month_impulsivity:
+    start_day: 22
+    weight: 0.50
+
+pantry_and_cooking:
+  initial_pantry:
+    rice: 3
+    egg: 4
+    chicken: 2
+    tempe: 2
+    meal_prep: 2
+  ingredients:
+    rice:
+      pack_price_idr: 48000
+      units_per_pack: 20
+      shelf_life_steps: 150
+      nutrition_per_unit: {hunger: -28.0, energy: 10.0, mood: 0.5}
+    egg:
+      pack_price_idr: 23500
+      units_per_pack: 16
+      shelf_life_steps: 75
+      nutrition_per_unit: {hunger: -12.0, energy: 5.0, mood: 2.0}
+    chicken:
+      pack_price_idr: 60000
+      units_per_pack: 10
+      shelf_life_steps: 35
+      nutrition_per_unit: {hunger: -22.0, energy: 9.0, mood: 5.5}
+    tempe:
+      pack_price_idr: 12000
+      units_per_pack: 12
+      shelf_life_steps: 25
+      nutrition_per_unit: {hunger: -10.0, energy: 4.0, mood: 1.5}
+  meal_composition_rules:
+    plain_rice_only_mood_penalty: -5.0
+    multi_lauk_mood_bonus: 2.0
+    max_meal_hunger_reduction: 75.0
+    max_meal_energy_gain: 28.0
+    reheat_mood_delta: -1.0
+  grocery_shopping:
+    energy_cost: 15.0
+    mood_delta: -4.0
+    transport_cost_idr: 0
+  cooking_costs_and_gates:
+    meal_prep_batch_size: 5
+    meal_prep_min_batch_size: 2
+    meal_prep_shelf_life_steps: 20
+    meal_prep_energy_cost: 30.0
+    meal_prep_min_energy: 48.0
+    meal_prep_min_mood: 55.0
+    cook_fresh_energy_cost: 22.0
+    cook_fresh_min_energy: 45.0
+    cook_fresh_min_mood: 50.0
+    morning_cook_fresh_extra_energy_cost: 18.0
+    morning_cook_fresh_min_energy: 58.0
+    morning_meal_prep_extra_energy_cost: 16.0
+    morning_meal_prep_min_energy: 62.0
+    reheat_prep_energy_cost: 10.0
+    reheat_prep_min_energy: 30.0
+    reheat_prep_min_mood: 45.0
+    max_packed_lunch_portions: 2
+    pack_bekal_energy_cost: 5.0
+    pack_bekal_min_energy: 20.0
+    pack_bekal_min_mood: 30.0
+    eat_bekal_energy_cost: 2.0
+  boredom_mechanics:
+    sensitivity: 0.85
+    recent_meal_window: 4
+    recent_repeat_mood_penalty: [0.0, -2.5, -9.0, -18.0]
+    consecutive_extra_mood_penalty: -5.5
+    apply_sensitivity_to_penalty: true
+
+biometrics_and_psychology:
+  state_bounds: [0.0, 100.0]
+  initial_state:
+    energy: 85.0
+    hunger: 20.0
+    mood: 75.0
+    academic_stress: 25.0
+    cafe_craving: 20.0
+  step_dynamics:
+    starvation_threshold: 75.0
+    starvation_energy_penalty_per_step: -10.0
+    starvation_mood_penalty_per_step: -8.0
+    overnight_hunger_gain: 8.0
+    skip_meal_hunger_threshold: 48.0
+    skip_meal_tolerance: 0.80
+    skip_meal_mood_penalty: -5.0
+    skip_meal_energy_penalty: -10.0
+    sleep_normal_energy_gain: 50.0
+    sleep_normal_energy_cap: 95.0
+    sleep_normal_mood_gain: 5.0
+    night_unwind_energy_gain: 5.0
+    night_unwind_mood_gain: 1.5
+    sleep_cramming_energy_gain: 25.0
+    sleep_cramming_mood_delta: -8.0
+    rest_step_energy_gain: 18.0
+    rest_step_mood_gain: 3.0
+    rest_step_high_craving_mood_delta: -2.0
+    min_hunger_to_eat: 20.0
+  craving_and_cafe:
+    stress_bonus_threshold: 55.0
+    stress_or_heat_craving_bonus: 3.0
+    distraction_threshold: 45.0
+    high_distraction_threshold: 75.0
+    distraction_mood_penalty_per_step: -3.5
+    high_distraction_mood_penalty_per_step: -7.0
+    distraction_room_study_efficiency: 0.55
+    high_distraction_room_study_efficiency: 0.30
+    cafe_session:
+      craving_reset_to: 0.0
+
+external_foods:
+  warung_sekitar:
+    label: "Warung Sekitar Tempat Tinggal"
+    tier: budget
+    cost_idr: 15000
+    hunger: -55.0
+    energy: 18.0
+    energy_cost: 3.0
+    mood: 3.0
+  pesan_antar:
+    label: "Pesan Antar (Delivery)"
+    tier: varied
+    cost_idr: 25000
+    hunger: -55.0
+    energy: 20.0
+    energy_cost: 0.0
+    mood: 7.0
+  kantin_hemat:
+    label: "Kantin Kampus Hemat"
+    tier: budget
+    cost_idr: 13000
+    hunger: -55.0
+    energy: 20.0
+    energy_cost: 2.0
+    mood: 4.5
+  kantin_variasi:
+    label: "Kantin Kampus Variasi"
+    tier: varied
+    cost_idr: 18000
+    hunger: -62.0
+    energy: 23.0
+    energy_cost: 2.0
+    mood: 8.5
+
+mobility_and_climate:
+  heat_sensitivity: 0.95
+  walk_physics:
+    walk_preference: balanced
+    max_walk_distance_km: 1.8
+    max_walk_distance_rain_km: 0.8
+    energy_cost_per_km_cool: 3.5
+    energy_cost_per_km_midday: 10.0
+    mood_delta_per_km_cool: -1.5
+    mood_delta_per_km_midday: -8.0
+    rain_extra_energy_per_km: 6.5
+    rain_extra_mood_per_km: -5.5
+  motorized_physics:
+    default_energy_cost: 3.0
+    mood_delta_cool: 0.0
+    mood_delta_midday: -2.0
+    mood_delta_rain: -3.0
+  impulse_items:
+    jajan_minimarket:
+      id: jajan_minimarket
+      label: "Jajan Minimarket / Kopi Sachet"
+      spend_idr: [8000, 15000]
+      hunger_delta: -12.0
+      mood_delta: 4.0
+      hungry_prob_bonus: 0.15
+      midday_prob_bonus: 0.12
+
+world_graph:
+  home_node_id: home
+  locations:
+    - id: home
+      label: "Kos / Tempat Tinggal"
+      zone: home
+      ambient_mood_delta: 0.0
+      ambient_stress_delta: 0.0
+      craving_gain_per_step: 4.0
+      can_sleep: true
+      has_kitchen: true
+      has_grocery: true
+      is_class_venue: false
+      can_study: true
+      closes_at_night: false
+      study_profile:
+        energy_cost: 10.0
+        stress_reduction: 12.0
+        mood_delta: 0.0
+        max_stress_gate: 80.0
+        affected_by_craving_distraction: true
+      food_options: [warung_sekitar, pesan_antar]
+      ui_position: {x: 130, y: 240}
+
+    - id: study_hub
+      label: "Perpustakaan / Co-Working"
+      zone: campus
+      ambient_mood_delta: 0.0
+      ambient_stress_delta: 0.0
+      craving_gain_per_step: 2.0
+      can_sleep: false
+      has_kitchen: false
+      has_grocery: false
+      is_class_venue: false
+      can_study: true
+      closes_at_night: true
+      study_profile:
+        energy_cost: 5.0
+        stress_reduction: 16.0
+        mood_delta: 2.0
+        max_stress_gate: 100.0
+        affected_by_craving_distraction: false
+        craving_relief: 24.0
+        craving_floor: 15.0
+        craving_reset: false
+        buff_duration_steps: 4
+        buff_craving_rate_multiplier: 0.65
+        daily_diminishing_returns: true
+        repeat_craving_relief: 6.0
+        first_visit_mood_gain: 5.0
+      wait_energy_cost: 2.0
+      wait_mood_delta: -2.0
+      temptation_prob: 0.12
+      impulse_item_id: jajan_minimarket
+      food_options: [kantin_hemat, kantin_variasi]
+      ui_position: {x: 370, y: 150}
+
+    - id: campus
+      label: "Gedung Kuliah / Kampus"
+      zone: campus
+      ambient_mood_delta: 0.0
+      ambient_stress_delta: 0.0
+      craving_gain_per_step: 3.0
+      can_sleep: false
+      has_kitchen: false
+      has_grocery: false
+      is_class_venue: true
+      can_study: false
+      closes_at_night: true
+      wait_energy_cost: 2.0
+      wait_mood_delta: -4.0
+      food_options: [kantin_hemat, kantin_variasi]
+      ui_position: {x: 520, y: 240}
+
+    - id: cafe
+      label: "Kafe / Working Space"
+      zone: third_place
+      ambient_mood_delta: 1.0
+      ambient_stress_delta: -1.0
+      craving_gain_per_step: 0.0
+      can_sleep: false
+      has_kitchen: false
+      has_grocery: false
+      is_class_venue: false
+      can_study: true
+      closes_at_night: true
+      study_profile:
+        energy_cost: 5.0
+        stress_reduction: 16.0
+        mood_delta: 4.0
+        max_stress_gate: 100.0
+        affected_by_craving_distraction: false
+        craving_reset: true
+        buff_duration_steps: 10
+        buff_craving_rate_multiplier: 0.35
+      leisure_spend_idr: [25000, 42000]
+      leisure_hunger_delta: -15.0
+      leisure_mood_gain: 26.0
+      leisure_stress_reduction: 26.0
+      leisure_energy_cost: 5.0
+      leisure_buff_duration_steps: 10
+      leisure_buff_craving_rate_multiplier: 0.35
+      food_options: []
+      ui_position: {x: 370, y: 370}
+
+  edges:
+    - id: direct_ride
+      label: "Ojol Langsung (Home <-> Kampus)"
+      source: home
+      target: campus
+      bidirectional: true
+      mode: goride
+      distance_km: 3.3
+      pricing:
+        pricing_model: ride_hailing_zone
+        zone_preset: goride_zona_1
+
+    - id: transit_hub_ride
+      label: "Angkutan / Ojol ke Hub"
+      source: home
+      target: study_hub
+      bidirectional: true
+      mode: public_transit
+      distance_km: 2.1
+      pricing:
+        pricing_model: manual_range
+        cost_normal_idr: [5000, 7000]
+        cost_peak_idr: [6000, 8000]
+      temptation_prob: 0.08
+      impulse_item_id: jajan_minimarket
+
+    - id: walk_hub_campus
+      label: "Jalan Kaki (Hub <-> Kampus)"
+      source: study_hub
+      target: campus
+      bidirectional: true
+      mode: walk
+      distance_km: 1.5
+      pricing:
+        pricing_model: free
+
+    - id: ride_home_cafe
+      label: "GoRide (Home <-> Kafe)"
+      source: home
+      target: cafe
+      bidirectional: true
+      mode: goride
+      distance_km: 2.3
+      pricing:
+        pricing_model: ride_hailing_zone
+        zone_preset: goride_zona_1
+
+    - id: ride_campus_cafe
+      label: "GoRide (Kampus <-> Kafe)"
+      source: campus
+      target: cafe
+      bidirectional: true
+      mode: goride
+      distance_km: 1.7
+      pricing:
+        pricing_model: ride_hailing_zone
+        zone_preset: goride_zona_1
+
+activities:
+  - {id: rest_or_sleep, label: "Istirahat / Tidur", handler: rest, target_nodes: [home]}
+  - {id: attend_class, label: "Hadiri Kuliah", handler: attend_schedule, target_nodes: [campus]}
+  - {id: home_study, label: "Belajar di Tempat Tinggal", handler: study, target_nodes: [home]}
+  - {id: hub_study, label: "Belajar di Perpustakaan / Hub", handler: hub_stay, target_nodes: [study_hub]}
+  - {id: cafe_session, label: "Ngafe / Ganti Suasana", handler: leisure_reset, target_nodes: [cafe]}
+  - {id: wait_at_campus, label: "Menunggu di Kampus", handler: wait, target_nodes: [campus, study_hub]}
+  - {id: grocery_shop, label: "Belanja Bahan Dapur", handler: grocery_shop, target_nodes: [home]}
+  - {id: night_cramming, label: "Begadang Nugas Malam", handler: night_cram, target_nodes: [home]}
+
+academics:
+  weekly_schedule:
+    monday:    [0, 1, 0, 1, 0]
+    tuesday:   [0, 1, 1, 0, 0]
+    wednesday: [0, 1, 1, 0, 0]
+    thursday:  [0, 1, 0, 1, 0]
+    friday:    [0, 0, 1, 0, 0]
+    saturday:  [0, 0, 0, 0, 0]
+    sunday:    [0, 0, 0, 0, 0]
+  weekday_task_probability: 1.0
+  weekday_base_task_stress_gain: 14.0
+  per_class_daily_stress_gain: 4.0
+  weekend_task_probability: 0.50
+  weekend_task_stress_gain: 6.0
+  room_study_max_stress_gate: 80.0
+  room_study_stress_reduction: 12.0
+  room_study_energy_cost: 10.0
+  night_cramming_stress_reduction: 24.0
+  night_cramming_energy_cost: 14.0
+  class_attendance_energy_cost: 10.0
+  absent_class_reward_penalty: -50.0
+  absent_class_stress_gain: 12.0
+  min_attendance_rate_for_exam: 0.80
+
+termination:
+  mode: hybrid
+  fatal_energy_threshold: 0.0
+  fatal_hunger_threshold: 100.0
+  fatal_hunger_consecutive_steps: 2
+  burnout_mood_threshold: 0.0
+  burnout_stress_threshold: 100.0
+  fatal_termination_penalty: -800.0
+
+rewards:
+  step_survival_bonus: 1.0
+  wellbeing_weights:
+    energy_weight: 0.015
+    mood_weight: 0.025
+    hunger_penalty_weight: -0.020
+    stress_penalty_weight: -0.030
+    excess_craving_penalty_weight: -0.035
+  critical_state_penalties:
+    starvation_per_step: -6.0
+    burnout_mood_per_step: -10.0
+    burnout_stress_per_step: -10.0
+    food_spoilage_per_unit: -0.35
+    emergency_return_penalty: -10.0
+  class_attendance_bonus: 6.0
+  terminal_episode_completion:
+    survived_30_days_bonus: 120.0
+    remaining_balance_reward_per_100k: 70.0
+    low_attendance_terminal_penalty: -100.0
+  budget_potential_shaping:
+    enabled: true
+    potential_scale: 220.0
+    gamma: 0.995
