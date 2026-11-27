@@ -79,7 +79,7 @@ def compute_edge_fare_bounds(
 
     if model == "manual_range":
         raw_range = pricing.cost_peak_idr if (is_peak and pricing.cost_peak_idr) else pricing.cost_normal_idr
-        surge = float(pricing.rain_surge_multiplier) if is_raining else 1.0
+        surge = float(pricing.rain_surge_multiplier or 1.0) if is_raining else 1.0
         return (
             float(round(int(raw_range[0]) * surge)),
             float(round(int(raw_range[1]) * surge)),
@@ -89,8 +89,8 @@ def compute_edge_fare_bounds(
         base_r = pricing.base_fare_idr or [0, 0]
         km_r = pricing.per_km_idr or [0, 0]
         dist = float(edge.distance_km)
-        mult = (float(pricing.peak_multiplier) if is_peak else 1.0) * (
-            float(pricing.rain_surge_multiplier) if is_raining else 1.0
+        mult = (float(pricing.peak_multiplier or 1.0) if is_peak else 1.0) * (
+            float(pricing.rain_surge_multiplier or 1.0) if is_raining else 1.0
         )
         low = (int(base_r[0]) + dist * int(km_r[0])) * mult
         high = (int(base_r[1]) + dist * int(km_r[1])) * mult
