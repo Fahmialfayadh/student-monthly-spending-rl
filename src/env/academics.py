@@ -4,7 +4,8 @@ import numpy as np
 class AcademicSchedule:
     """
     Mengelola kalender waktu simulasi (hari, hari dalam minggu, blok waktu),
-    matriks jadwal kuliah mingguan, serta kemunculan tugas harian.
+    matriks jadwal kuliah mingguan, serta kemunculan tugas harian yang proporsional
+    dengan kepadatan jadwal kuliah (weekday vs weekend).
     """
 
     DAY_NAMES = (
@@ -47,12 +48,31 @@ class AcademicSchedule:
     def is_class_scheduled(self, day_name: str, step_in_day: int) -> bool:
         return bool(self.weekly_schedule[day_name][step_in_day])
 
+    def count_classes_today(self, day_name: str) -> int:
+        return int(sum(int(bool(slot)) for slot in self.weekly_schedule[day_name]))
+
     def has_later_class_today(self, day_name: str, step_in_day: int) -> bool:
         daily_schedule = self.weekly_schedule[day_name]
         return any(bool(slot) for slot in daily_schedule[step_in_day + 1 :])
 
-    def roll_daily_task_stress_gain(self, random_generator: np.random.Generator) -> float:
-        daily_task_probability = float(self.academics_config["daily_task_probability"])
-        if random_generator.random() < daily_task_probability:
-            return float(self.academics_config["new_task_stress_gain"])
+    def get_attendance_rate(self) -> float:
+        if self.total_classes_scheduled <= 0:
+            return 1.0
+        return self.total_classes_attended / self.total_classes_scheduled
+
+    def roll_daily_task_stress_gain(
+        self, random_generator: np.random.Generator, day_of_week: int, day_name: str
+    ) -> float:
+        is_weekend = day_of_week >= 5
+        if is_weekend:
+            prob = float(self.academics_config["weekend_task_probability"])
+            if random_generator.random() < prob:
+                return float(self.academics_config["weekend_task_stress_gain"])
+            return 0.0
+
+        prob = float(self.academics_config["weekday_task_probability"])
+        if random_generator.random() < prob:
+            base_gain = float(self.academics_config["weekday_base_task_stress_gain"])
+            per_class_gain = float(self.academics_config["per_class_daily_stress_gain"])
+            return base_gain + per_class_gain * self.count_classes_today(day_name)
         return 0.0

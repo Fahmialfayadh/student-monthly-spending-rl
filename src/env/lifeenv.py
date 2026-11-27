@@ -1,3 +1,4 @@
+import math
 import yaml
 import numpy as np
 import gymnasium as gym
@@ -9,6 +10,7 @@ from src.env.actions import (
     execute_activity_action,
     execute_meal_action,
     parse_action_vector,
+    try_pack_bekal_before_departure,
 )
 from src.env.biometrics import BiometricsState
 from src.env.finance import FinanceManager
@@ -18,31 +20,42 @@ from src.env.pantry import PantryManager
 
 class StudentLifeEnv(gym.Env):
     """
-    Environment Gymnasium utama (5 step/hari, 150 step/bulan, 1 saldo operasional)
+    Environment Gymnasium realistis (5 step/hari, 150 step/bulan, 1 saldo operasional bersih)
     yang menghubungkan 5 modul domain: finance, biometrics, pantry, mobility, dan academics.
     """
 
     metadata = {"render_modes": ["human"]}
 
     OBSERVATION_FEATURE_NAMES = [
-        "current_step",
-        "current_day",
-        "day_of_week",
-        "step_in_day",
+        "days_remaining",
+        "day_of_week_sin",
+        "day_of_week_cos",
+        "step_in_day_sin",
+        "step_in_day_cos",
+        "is_late_month",
+        "is_midday_climate",
+        "is_raining",
+        "is_peak_ojol",
         "is_class_scheduled_now",
         "is_class_scheduled_next_step",
         "has_later_class_today",
+        "attendance_rate_so_far",
         "is_at_campus",
-        "waited_until_evening",
         "balance_idr",
+        "pantry_inventory_value_idr",
         "is_balance_low",
+        "burn_rate_per_day_idr",
+        "budget_runway_days",
         "energy",
         "hunger",
         "mood",
         "academic_stress",
         "cafe_craving",
         "cafe_buff_remaining_steps",
+        "ccws_visits_today",
         "consecutive_same_meal_count",
+        "recent_apartemen_warung_count",
+        "recent_warung_hemat_count",
         "consecutive_fatal_hunger_steps",
         "rice_stock_units",
         "egg_stock_units",
@@ -50,22 +63,32 @@ class StudentLifeEnv(gym.Env):
         "tempe_stock_units",
         "meal_prep_stock_portions",
         "packed_lunch_stock_portions",
+        "min_shelf_life_egg_steps",
         "min_shelf_life_chicken_steps",
         "min_shelf_life_tempe_steps",
         "min_shelf_life_meal_prep_steps",
+        "has_non_repeating_meal_prep",
+        "has_non_repeating_packed_lunch",
         "last_meal_had_egg",
         "last_meal_had_chicken",
         "last_meal_had_tempe",
+        "last_meal_was_apartemen_warung",
+        "last_meal_was_delivery_food",
         "last_meal_was_warung_hemat",
         "last_meal_was_warung_variasi",
-        "last_meal_was_craving_snack",
         "last_meal_was_plain_rice",
     ]
 
-    def __init__(self, yaml_path: str = "env_config.yaml", render_mode: str | None = None):
+    def __init__(
+        self,
+        yaml_path: str = "env_config.yaml",
+        render_mode: str | None = None,
+        exploring_starts_pantry: bool = False,
+    ):
         super().__init__()
         self.yaml_path = yaml_path
         self.render_mode = render_mode
+        self.exploring_starts_pantry = bool(exploring_starts_pantry)
 
         with open(yaml_path, "r", encoding="utf-8") as config_file:
             self.config = yaml.safe_load(config_file)
@@ -88,30 +111,32 @@ class StudentLifeEnv(gym.Env):
         self.pantry = PantryManager(self.pantry_config)
         self.academics = AcademicSchedule(self.environment_config, self.academics_config)
 
-        # Action space MultiDiscrete (11 dimensi / 38 logits)
+        # Action space MultiDiscrete terpadu (6 dimensi / 51 logits)
+        raw_dimensions = self.config["action_space"]["dimensions"]
         self.action_dimensions = {
-            key: list(values)
-            for key, values in self.config["action_space"]["dimensions"].items()
+            "activity": list(raw_dimensions["activity"]),
+            "route": list(raw_dimensions["route"]),
+            "meal_mode": list(raw_dimensions["meal_mode"]),
+            "cook_combo": list(range(len(PantryManager.COOK_COMBOS))),
+            "bring_bekal": list(raw_dimensions["bring_bekal"]),
+            "grocery_bundle": list(range(len(PantryManager.GROCERY_BUNDLES))),
         }
-        self.meal_mode_names = self.action_dimensions["meal_mode"]
-        self.cook_rice_options = self.action_dimensions["cook_rice"]
-        self.cook_egg_options = self.action_dimensions["cook_egg"]
-        self.cook_chicken_options = self.action_dimensions["cook_chicken"]
-        self.cook_tempe_options = self.action_dimensions["cook_tempe"]
-        self.mobility_names = self.action_dimensions["mobility"]
         self.activity_names = self.action_dimensions["activity"]
-        self.buy_rice_options = self.action_dimensions["buy_rice"]
-        self.buy_egg_options = self.action_dimensions["buy_egg"]
-        self.buy_chicken_options = self.action_dimensions["buy_chicken"]
-        self.buy_tempe_options = self.action_dimensions["buy_tempe"]
+        self.route_names = self.action_dimensions["route"]
+        self.meal_mode_names = self.action_dimensions["meal_mode"]
 
         self.action_space = spaces.MultiDiscrete([
-            len(options) for options in self.action_dimensions.values()
+            len(self.activity_names),
+            len(self.route_names),
+            len(self.meal_mode_names),
+            len(PantryManager.COOK_COMBOS),
+            len(self.action_dimensions["bring_bekal"]),
+            len(PantryManager.GROCERY_BUNDLES),
         ])
 
         self.observation_feature_names = list(self.OBSERVATION_FEATURE_NAMES)
         self.observation_space = spaces.Box(
-            low=0.0,
+            low=-1.0,
             high=np.inf,
             shape=(len(self.observation_feature_names),),
             dtype=np.float32,
@@ -119,7 +144,7 @@ class StudentLifeEnv(gym.Env):
 
         self.current_step = 0
         self.current_location = "apartment"
-        self.waited_until_evening = False
+        self.current_is_raining = False
 
     @property
     def balance_idr(self) -> float:
@@ -149,37 +174,101 @@ class StudentLifeEnv(gym.Env):
     def cafe_craving(self) -> float:
         return self.biometrics.cafe_craving
 
+    def _roll_rain_for_step(self, step_index: int) -> bool:
+        _, _, step_in_day, _ = self.academics.get_time_context(step_index)
+        step_def = self.academics.get_step_definition(step_in_day)
+        rain_prob = float(step_def.get("rain_prob", 0.0))
+        return bool(self.np_random.random() < rain_prob)
+
+    def _get_budget_potential(self) -> float:
+        """
+        Phi(s): rasio kekayaan bersih operasional (saldo + nilai stok dapur 1:1)
+        terhadap saldo awal. Tetap 100% policy-invariant karena Phi(terminal) = 0.
+        """
+        shaping_config = self.rewards_config["budget_potential_shaping"]
+        initial_budget = max(1.0, self.finance.initial_operational_budget_idr)
+        effective_wealth = self.finance.balance_idr + self.pantry.get_inventory_value_idr()
+        wealth_ratio = max(0.0, effective_wealth / initial_budget)
+        return float(shaping_config["potential_scale"]) * wealth_ratio
+
     def reset(self, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
 
         self.current_step = 0
         self.current_location = "apartment"
-        self.waited_until_evening = False
 
         self.finance.reset()
         self.biometrics.reset()
         self.pantry.reset()
         self.academics.reset()
 
+        # Training-only Exploring Starts (Sutton & Barto): membuka akses aksi masak/prep/bekal
+        # sejak awal tanpa memberi uang gratis (harga paket tetap dipotong penuh dari saldo).
+        if self.exploring_starts_pantry and self.np_random.random() < 0.60:
+            self._apply_exploring_start_pantry()
+
+        self.current_is_raining = self._roll_rain_for_step(0)
+
         return self._get_observation(), self._build_info_dictionary({})
+
+    def _apply_exploring_start_pantry(self) -> None:
+        starter_bundles = (
+            ("rice", "egg", "tempe"),
+            ("rice", "egg", "chicken"),
+            ("rice", "egg", "chicken", "tempe"),
+            ("rice", "chicken", "tempe"),
+        )
+        chosen_bundle = starter_bundles[int(self.np_random.integers(0, len(starter_bundles)))]
+        ingredients_cfg = self.pantry_config["ingredients"]
+        for item in chosen_bundle:
+            price = float(ingredients_cfg[item]["pack_price_idr"])
+            if self.finance.pay(price, category="grocery"):
+                self.pantry.add_grocery_pack(item)
+
+        # Sebagian kecil episode training juga mulai dengan 1 batch meal_prep (dipotong dari stok mentah)
+        if self.np_random.random() < 0.40:
+            prep_qty = {"rice": 1, "egg": 1, "chicken": 0, "tempe": 1}
+            if not self.pantry.has_enough_ingredients(prep_qty, batch_multiplier=4):
+                prep_qty = {"rice": 1, "egg": 0, "chicken": 1, "tempe": 0}
+            if self.pantry.has_enough_ingredients(prep_qty, batch_multiplier=4):
+                self.pantry.consume_ingredients_fifo(prep_qty, batch_multiplier=4)
+                h_d, e_d, m_d, sig = self.pantry.calculate_custom_meal_profile(prep_qty)
+                val = self.pantry.compute_combo_ingredient_value_idr(prep_qty)
+                self.pantry.store_meal_prep_batch(
+                    portions=4,
+                    hunger_delta=h_d,
+                    energy_delta=e_d,
+                    mood_delta=m_d,
+                    meal_signature=sig,
+                    portion_value_idr=val,
+                )
 
     def step(self, action):
         step_reward = 0.0
         step_events: dict[str, object] = {}
+        potential_before = self._get_budget_potential()
 
-        current_day, _, step_in_day, day_name = self.academics.get_time_context(self.current_step)
+        current_day, day_of_week, step_in_day, day_name = self.academics.get_time_context(
+            self.current_step
+        )
         step_definition = self.academics.get_step_definition(step_in_day)
         current_climate = str(step_definition["climate"])
         current_ojol_tariff = str(step_definition["ojol_tariff"])
         step_hunger_gain = float(step_definition["hunger_gain"])
+        is_raining_now = self.current_is_raining
         is_class_scheduled_now = self.academics.is_class_scheduled(day_name, step_in_day)
+
+        if is_raining_now:
+            step_events["is_raining"] = True
 
         if is_class_scheduled_now:
             self.academics.total_classes_scheduled += 1
 
-        # 1. Tugas harian baru di awal hari (step pagi_awal)
+        # 1. Tugas harian baru di awal hari (proporsional dengan jadwal weekday vs weekend)
         if step_in_day == 0:
-            task_stress_gain = self.academics.roll_daily_task_stress_gain(self.np_random)
+            task_stress_gain = self.academics.roll_daily_task_stress_gain(
+                self.np_random, day_of_week, day_name
+            )
             if task_stress_gain > 0.0:
                 self.biometrics.academic_stress += task_stress_gain
                 step_events["new_daily_task_added"] = True
@@ -195,64 +284,103 @@ class StudentLifeEnv(gym.Env):
             "grocery_shop",
             "night_cramming",
         ):
-            effective_activity = "rest_or_sleep"
+            effective_activity = (
+                "wait_at_department"
+                if self.current_location == "campus" and step_in_day < (self.steps_per_day - 1)
+                else "rest_or_sleep"
+            )
             step_events["forced_rest_due_to_mood_burnout"] = True
 
-        # 3. Fase Mobilitas (src/env/mobility.py)
-        (
-            self.current_location,
-            self.waited_until_evening,
-            effective_activity,
-            mobility_reward,
-        ) = resolve_mobility_phase(
+        # 3a. Pra-keberangkatan di apartemen: masak sebelum berangkat & bungkus bekal ringan
+        requested_meal_mode = str(parsed_action["meal_mode"])
+        executed_meal_mode: str | None = None
+        campus_activities = {"attend_class", "ccws_stay", "wait_at_department"}
+        heading_to_campus = (
+            self.current_location == "apartment"
+            and effective_activity in campus_activities
+            and step_in_day < (self.steps_per_day - 1)
+        )
+
+        if self.current_location == "apartment":
+            if requested_meal_mode in ("cook_fresh", "meal_prep"):
+                executed_meal_mode = execute_meal_action(
+                    requested_meal_mode=requested_meal_mode,
+                    requested_cook_quantities=parsed_action["cook_quantities"],
+                    current_location="apartment",
+                    step_in_day=step_in_day,
+                    is_stress_burned_out=is_stress_burned_out,
+                    finance_manager=self.finance,
+                    biometrics_state=self.biometrics,
+                    pantry_manager=self.pantry,
+                    pantry_config=self.pantry_config,
+                    biometrics_config=self.biometrics_config,
+                    step_events=step_events,
+                )
+            if heading_to_campus and bool(parsed_action["bring_bekal"]):
+                try_pack_bekal_before_departure(
+                    bring_bekal=True,
+                    biometrics_state=self.biometrics,
+                    pantry_manager=self.pantry,
+                    pantry_config=self.pantry_config,
+                    step_events=step_events,
+                )
+
+        # 3b. Fase Mobilitas (src/env/mobility.py)
+        self.current_location, effective_activity, mobility_reward = resolve_mobility_phase(
             current_location=self.current_location,
-            waited_until_evening=self.waited_until_evening,
             effective_activity=effective_activity,
-            requested_mobility=str(parsed_action["mobility"]),
+            requested_route=str(parsed_action["route"]),
             is_class_scheduled_now=is_class_scheduled_now,
             step_in_day=step_in_day,
             steps_per_day=self.steps_per_day,
             current_climate=current_climate,
             current_ojol_tariff=current_ojol_tariff,
+            is_raining=is_raining_now,
+            current_day=current_day,
             random_generator=self.np_random,
             finance_manager=self.finance,
             biometrics_state=self.biometrics,
+            finance_config=self.finance_config,
             mobility_config=self.mobility_config,
             rewards_config=self.rewards_config,
             step_events=step_events,
         )
         step_reward += mobility_reward
 
-        # 4. Fase Makan, Masak Pagi Berat, Meal Prep, & Bekal (src/env/actions.py)
-        executed_meal_mode = execute_meal_action(
-            requested_meal_mode=str(parsed_action["meal_mode"]),
-            requested_cook_quantities=parsed_action["cook_quantities"],
-            current_location=self.current_location,
-            step_in_day=step_in_day,
-            is_stress_burned_out=is_stress_burned_out,
-            finance_manager=self.finance,
-            biometrics_state=self.biometrics,
-            pantry_manager=self.pantry,
-            pantry_config=self.pantry_config,
-            biometrics_config=self.biometrics_config,
-            step_events=step_events,
-        )
+        # 4. Fase Makan di Lokasi Tujuan (jika belum dieksekusi di pra-keberangkatan)
+        if executed_meal_mode is None:
+            executed_meal_mode = execute_meal_action(
+                requested_meal_mode=requested_meal_mode,
+                requested_cook_quantities=parsed_action["cook_quantities"],
+                current_location=self.current_location,
+                step_in_day=step_in_day,
+                is_stress_burned_out=is_stress_burned_out,
+                finance_manager=self.finance,
+                biometrics_state=self.biometrics,
+                pantry_manager=self.pantry,
+                pantry_config=self.pantry_config,
+                biometrics_config=self.biometrics_config,
+                step_events=step_events,
+            )
         step_events["executed_meal_mode"] = executed_meal_mode
 
         # 5. Fase Aktivitas & Kehadiran Kuliah (src/env/actions.py)
-        attended_class, executed_activity, self.waited_until_evening = execute_activity_action(
+        attended_class, executed_activity, self.current_location = execute_activity_action(
             effective_activity=effective_activity,
             current_location=self.current_location,
-            waited_until_evening=self.waited_until_evening,
             is_class_scheduled_now=is_class_scheduled_now,
             is_stress_burned_out=is_stress_burned_out,
             step_in_day=step_in_day,
             steps_per_day=self.steps_per_day,
+            current_climate=current_climate,
+            is_raining=is_raining_now,
+            current_day=current_day,
             requested_grocery_flags=parsed_action["grocery_flags"],
             random_generator=self.np_random,
             finance_manager=self.finance,
             biometrics_state=self.biometrics,
             pantry_manager=self.pantry,
+            finance_config=self.finance_config,
             academics_config=self.academics_config,
             mobility_config=self.mobility_config,
             biometrics_config=self.biometrics_config,
@@ -272,13 +400,15 @@ class StudentLifeEnv(gym.Env):
                 )
                 step_events["missed_scheduled_class"] = True
 
-        # 6. Dinamika Akhir Step (Tidur otomatis, lapar per blok, craving, pembusukan stok & bekal)
+        # 6. Dinamika Akhir Step (Tidur otomatis, lapar, craving, pembusukan stok & bekal)
+        effective_climate = "rain" if is_raining_now else current_climate
         step_reward += self.biometrics.apply_end_of_step_dynamics(
             current_day=current_day,
             step_in_day=step_in_day,
             steps_per_day=self.steps_per_day,
             step_hunger_gain=step_hunger_gain,
-            current_climate=current_climate,
+            current_climate=effective_climate,
+            current_location=self.current_location,
             executed_activity=executed_activity,
             finance_config=self.finance_config,
             rewards_config=self.rewards_config,
@@ -287,7 +417,6 @@ class StudentLifeEnv(gym.Env):
 
         spoiled_units = self.pantry.age_and_spoil_batches()
         if step_in_day == (self.steps_per_day - 1):
-            self.waited_until_evening = False
             spoiled_units += self.pantry.spoil_uneaten_packed_lunch_end_of_day()
 
         if spoiled_units > 0:
@@ -297,7 +426,7 @@ class StudentLifeEnv(gym.Env):
             step_reward += spoiled_units * spoilage_penalty
             step_events["spoiled_units"] = spoiled_units
 
-        # 7. Reward Kesejahteraan & Evaluasi Terminasi Hybrid
+        # 7. Reward Kesejahteraan & Evaluasi Terminasi
         step_reward += self.biometrics.compute_wellbeing_reward(self.rewards_config, step_events)
         self.current_step += 1
 
@@ -314,7 +443,20 @@ class StudentLifeEnv(gym.Env):
             step_reward += (self.finance.balance_idr / 100_000.0) * float(
                 completion_rewards["remaining_balance_reward_per_100k"]
             )
+            min_attendance = float(self.academics_config["min_attendance_rate_for_exam"])
+            if self.academics.get_attendance_rate() < min_attendance:
+                step_reward += float(completion_rewards["low_attendance_terminal_penalty"])
+                step_events["low_attendance_penalty_applied"] = True
             step_events["termination_reason"] = "completed_30_days"
+        else:
+            self.current_is_raining = self._roll_rain_for_step(self.current_step)
+
+        shaping_config = self.rewards_config["budget_potential_shaping"]
+        if bool(shaping_config["enabled"]):
+            potential_after = 0.0 if terminated else self._get_budget_potential()
+            shaping_reward = float(shaping_config["gamma"]) * potential_after - potential_before
+            step_reward += shaping_reward
+            step_events["budget_potential_shaping_reward"] = shaping_reward
 
         return (
             self._get_observation(),
@@ -328,8 +470,8 @@ class StudentLifeEnv(gym.Env):
         return build_action_masks(
             current_step=self.current_step,
             current_location=self.current_location,
+            is_raining=self.current_is_raining,
             steps_per_day=self.steps_per_day,
-            action_dimensions=self.action_dimensions,
             academics=self.academics,
             finance=self.finance,
             biometrics=self.biometrics,
@@ -341,6 +483,7 @@ class StudentLifeEnv(gym.Env):
         current_day, day_of_week, step_in_day, day_name = self.academics.get_time_context(
             self.current_step
         )
+        step_def = self.academics.get_step_definition(step_in_day)
         is_class_now = 1.0 if self.academics.is_class_scheduled(day_name, step_in_day) else 0.0
 
         if self.current_step + 1 < self.total_steps:
@@ -354,27 +497,56 @@ class StudentLifeEnv(gym.Env):
             is_class_next = 0.0
 
         last_meal_flags = self.pantry.get_last_meal_one_hot_flags()
+        days_remaining = max(0.0, (self.total_steps - self.current_step) / self.steps_per_day)
+        elapsed_days = max(1.0, self.current_step / self.steps_per_day)
+        burn_rate_per_day = self.finance.get_total_spent_idr() / elapsed_days
+        if burn_rate_per_day > 0.0:
+            budget_runway_days = min(
+                float(self.environment_config["episode_days"]),
+                self.finance.balance_idr / burn_rate_per_day,
+            )
+        else:
+            budget_runway_days = float(self.environment_config["episode_days"])
+
+        dow_angle = 2.0 * math.pi * (day_of_week / 7.0)
+        step_angle = 2.0 * math.pi * (step_in_day / self.steps_per_day)
+        is_late_month = (
+            1.0 if current_day >= int(self.finance_config["late_month_impulsivity"]["start_day"]) else 0.0
+        )
+        is_midday = 1.0 if (str(step_def["climate"]) == "midday" and not self.current_is_raining) else 0.0
+        is_peak_ojol = 1.0 if str(step_def["ojol_tariff"]) == "peak" else 0.0
 
         return np.array(
             [
-                float(self.current_step),
-                float(current_day),
-                float(day_of_week),
-                float(step_in_day),
+                days_remaining,
+                math.sin(dow_angle),
+                math.cos(dow_angle),
+                math.sin(step_angle),
+                math.cos(step_angle),
+                is_late_month,
+                is_midday,
+                1.0 if self.current_is_raining else 0.0,
+                is_peak_ojol,
                 is_class_now,
                 is_class_next,
                 1.0 if self.academics.has_later_class_today(day_name, step_in_day) else 0.0,
+                self.academics.get_attendance_rate(),
                 1.0 if self.current_location == "campus" else 0.0,
-                1.0 if self.waited_until_evening else 0.0,
                 self.finance.balance_idr,
+                self.pantry.get_inventory_value_idr(),
                 1.0 if self.finance.is_balance_low() else 0.0,
+                burn_rate_per_day,
+                budget_runway_days,
                 self.biometrics.energy,
                 self.biometrics.hunger,
                 self.biometrics.mood,
                 self.biometrics.academic_stress,
                 self.biometrics.cafe_craving,
                 float(self.biometrics.cafe_buff_remaining_steps),
+                float(self.biometrics.ccws_visits_today),
                 float(self.pantry.consecutive_same_meal_count),
+                float(self.pantry.get_recent_meal_count("apartemen_warung")),
+                float(self.pantry.get_recent_meal_count("warung_hemat")),
                 float(self.biometrics.consecutive_fatal_hunger_steps),
                 float(self.pantry.get_ingredient_total_units("rice")),
                 float(self.pantry.get_ingredient_total_units("egg")),
@@ -382,9 +554,12 @@ class StudentLifeEnv(gym.Env):
                 float(self.pantry.get_ingredient_total_units("tempe")),
                 float(self.pantry.get_meal_prep_total_portions()),
                 float(self.pantry.get_packed_lunch_total_portions()),
+                float(self.pantry.get_min_ingredient_shelf_life("egg")),
                 float(self.pantry.get_min_ingredient_shelf_life("chicken")),
                 float(self.pantry.get_min_ingredient_shelf_life("tempe")),
                 float(self.pantry.get_min_meal_prep_shelf_life()),
+                1.0 if self.pantry.has_non_repeating_meal_prep() else 0.0,
+                1.0 if self.pantry.has_non_repeating_packed_lunch() else 0.0,
                 *last_meal_flags,
             ],
             dtype=np.float32,
@@ -394,7 +569,9 @@ class StudentLifeEnv(gym.Env):
         return {
             "current_step": self.current_step,
             "current_location": self.current_location,
+            "is_raining": self.current_is_raining,
             "balance_idr": self.finance.balance_idr,
+            "pantry_inventory_value_idr": self.pantry.get_inventory_value_idr(),
             "spending_by_category_idr": self.finance.get_spending_summary(),
             "total_classes_scheduled": self.academics.total_classes_scheduled,
             "total_classes_attended": self.academics.total_classes_attended,
@@ -408,8 +585,9 @@ class StudentLifeEnv(gym.Env):
             return
         current_day, _, step_in_day, day_name = self.academics.get_time_context(self.current_step)
         step_name = self.academics.get_step_definition(step_in_day)["name"]
+        rain_str = " | HUJAN" if self.current_is_raining else ""
         print(
-            f"[Hari {current_day:02d} | {day_name.capitalize()} - {step_name} | {self.current_location}] "
+            f"[Hari {current_day:02d} | {day_name.capitalize()} - {step_name} | {self.current_location}{rain_str}] "
             f"Saldo: Rp {self.finance.balance_idr:,.0f} | Bekal: {self.pantry.get_packed_lunch_total_portions()} | "
             f"Energi: {self.biometrics.energy:.1f} | Lapar: {self.biometrics.hunger:.1f} | "
             f"Mood: {self.biometrics.mood:.1f} | Stres: {self.biometrics.academic_stress:.1f} | "

@@ -1,11 +1,45 @@
 class PantryManager:
     """
-    Mengelola inventaris dapur berbasis FIFO (bahan mentah, meal prep kulkas,
-    serta kotak bekal yang dibawa ke kampus), perhitungan nutrisi racikan lauk
-    mandiri, kejenuhan menu (boredom), dan penuaan/pembusukan stok.
+    Mengelola inventaris dapur berbasis Smart-FIFO (bahan mentah, meal prep kulkas,
+    serta kotak bekal yang dibawa ke kampus), valuasi stok dapur (IDR) untuk
+    budget potential shaping, racikan lauk mandiri, boredom, dan penuaan stok.
     """
 
     INGREDIENT_NAMES = ("rice", "egg", "chicken", "tempe")
+
+    # 18 kombinasi racikan bebas yang valid & tidak redundant:
+    # (rice in {0, 1}, total lauk 0..2, minimal 1 unit total)
+    COOK_COMBOS: tuple[tuple[int, int, int, int], ...] = (
+        (1, 0, 0, 0),  # plain_rice
+        (1, 1, 0, 0),  # rice + 1 egg
+        (1, 2, 0, 0),  # rice + 2 egg
+        (1, 0, 1, 0),  # rice + 1 chicken
+        (1, 0, 2, 0),  # rice + 2 chicken
+        (1, 0, 0, 1),  # rice + 1 tempe
+        (1, 0, 0, 2),  # rice + 2 tempe
+        (1, 1, 1, 0),  # rice + 1 egg + 1 chicken
+        (1, 1, 0, 1),  # rice + 1 egg + 1 tempe
+        (1, 0, 1, 1),  # rice + 1 chicken + 1 tempe
+        (0, 1, 0, 0),  # 1 egg
+        (0, 2, 0, 0),  # 2 egg
+        (0, 0, 1, 0),  # 1 chicken
+        (0, 0, 2, 0),  # 2 chicken
+        (0, 0, 0, 1),  # 1 tempe
+        (0, 1, 0, 1),  # 1 egg + 1 tempe
+        (0, 1, 1, 0),  # 1 egg + 1 chicken
+        (0, 0, 1, 1),  # 1 chicken + 1 tempe
+    )
+
+    # 15 subset non-kosong belanja bahan (rice, egg, chicken, tempe)
+    GROCERY_BUNDLES: tuple[tuple[int, int, int, int], ...] = tuple(
+        (
+            (mask >> 0) & 1,
+            (mask >> 1) & 1,
+            (mask >> 2) & 1,
+            (mask >> 3) & 1,
+        )
+        for mask in range(1, 16)
+    )
 
     def __init__(self, pantry_config: dict):
         self.pantry_config = pantry_config
@@ -14,10 +48,17 @@ class PantryManager:
         self.cooking_gates = pantry_config["cooking_costs_and_gates"]
         self.boredom_config = pantry_config["boredom_mechanics"]
 
+        self.unit_prices_idr: dict[str, float] = {
+            name: float(self.ingredients_config[name]["pack_price_idr"])
+            / float(self.ingredients_config[name]["units_per_pack"])
+            for name in self.INGREDIENT_NAMES
+        }
+
         self.ingredient_batches: dict[str, list[dict[str, int]]] = {}
         self.meal_prep_batches: list[dict[str, float | int | str]] = []
         self.packed_lunch_portions: list[dict[str, float | str]] = []
         self.last_meal_signature: str | None = None
+        self.recent_meal_signatures: list[str] = []
         self.consecutive_same_meal_count = 0
         self.total_spoiled_units = 0
 
@@ -28,6 +69,7 @@ class PantryManager:
         self.meal_prep_batches = []
         self.packed_lunch_portions = []
         self.last_meal_signature = None
+        self.recent_meal_signatures = []
         self.consecutive_same_meal_count = 0
         self.total_spoiled_units = 0
 
@@ -43,14 +85,66 @@ class PantryManager:
 
         initial_meal_prep_portions = int(initial_pantry.get("meal_prep", 0))
         if initial_meal_prep_portions > 0:
+            default_cost = (
+                self.unit_prices_idr["rice"]
+                + self.unit_prices_idr["egg"]
+                + self.unit_prices_idr["tempe"]
+            )
             self.meal_prep_batches.append({
                 "portions": initial_meal_prep_portions,
                 "remaining_shelf_life_steps": int(self.cooking_gates["meal_prep_shelf_life_steps"]),
-                "hunger_delta": -52.0,
-                "energy_delta": 20.0,
-                "mood_delta": 4.5,
+                "hunger_delta": -50.0,
+                "energy_delta": 19.0,
+                "mood_delta": 6.0,
                 "meal_signature": "egg+tempe",
+                "portion_value_idr": default_cost,
             })
+
+    # ------------------------------------------------------------------
+    # Utilitas Combo & Valuasi Stok
+    # ------------------------------------------------------------------
+    @classmethod
+    def decode_cook_combo(cls, combo_index: int) -> dict[str, int]:
+        rice, egg, chicken, tempe = cls.COOK_COMBOS[int(combo_index)]
+        return {"rice": rice, "egg": egg, "chicken": chicken, "tempe": tempe}
+
+    @classmethod
+    def decode_grocery_bundle(cls, bundle_index: int) -> dict[str, bool]:
+        rice, egg, chicken, tempe = cls.GROCERY_BUNDLES[int(bundle_index)]
+        return {
+            "rice": bool(rice),
+            "egg": bool(egg),
+            "chicken": bool(chicken),
+            "tempe": bool(tempe),
+        }
+
+    def get_grocery_bundle_cost_idr(self, bundle_index: int) -> float:
+        flags = self.decode_grocery_bundle(bundle_index)
+        return sum(
+            float(self.ingredients_config[name]["pack_price_idr"])
+            for name in self.INGREDIENT_NAMES
+            if flags[name]
+        )
+
+    def compute_combo_ingredient_value_idr(self, quantities: dict[str, int]) -> float:
+        return sum(
+            self.unit_prices_idr[name] * int(quantities[name]) for name in self.INGREDIENT_NAMES
+        )
+
+    def get_inventory_value_idr(self) -> float:
+        """Total nilai rupiah bahan mentah + meal prep + bekal di dapur/tas."""
+        raw_value = sum(
+            self.get_ingredient_total_units(name) * self.unit_prices_idr[name]
+            for name in self.INGREDIENT_NAMES
+        )
+        prep_value = sum(
+            int(batch["portions"]) * float(batch.get("portion_value_idr", 0.0))
+            for batch in self.meal_prep_batches
+        )
+        bekal_value = sum(
+            float(portion.get("portion_value_idr", 0.0)) for portion in self.packed_lunch_portions
+        )
+        return float(raw_value + prep_value + bekal_value)
 
     # ------------------------------------------------------------------
     # Cek Stok & Daya Simpan
@@ -88,30 +182,55 @@ class PantryManager:
             "packed_lunch": self.get_packed_lunch_total_portions(),
         }
 
+    def get_recent_meal_count(self, meal_signature: str) -> int:
+        return sum(1 for sig in self.recent_meal_signatures if sig == meal_signature)
+
+    def has_non_repeating_meal_prep(self) -> bool:
+        if not self.meal_prep_batches:
+            return False
+        return any(
+            self.get_recent_meal_count(str(batch["meal_signature"])) == 0
+            for batch in self.meal_prep_batches
+        )
+
+    def has_non_repeating_packed_lunch(self) -> bool:
+        if not self.packed_lunch_portions:
+            return False
+        return any(
+            self.get_recent_meal_count(str(portion["meal_signature"])) == 0
+            for portion in self.packed_lunch_portions
+        )
+
     def get_last_meal_one_hot_flags(self) -> list[float]:
-        """Mengembalikan 7 flag biner identitas menu terakhir agar observasi 100% Markovian."""
+        """Mengembalikan 8 flag biner identitas menu terakhir agar observasi Markovian."""
         signature = self.last_meal_signature or ""
         parts = set(signature.split("+")) if signature else set()
         return [
             1.0 if "egg" in parts else 0.0,
             1.0 if "chicken" in parts else 0.0,
             1.0 if "tempe" in parts else 0.0,
+            1.0 if signature == "apartemen_warung" else 0.0,
+            1.0 if signature == "delivery_food" else 0.0,
             1.0 if signature == "warung_hemat" else 0.0,
             1.0 if signature == "warung_variasi" else 0.0,
-            1.0 if signature == "craving_snack" else 0.0,
             1.0 if signature == "plain_rice" else 0.0,
         ]
+
+    def max_portions_possible(self, requested_quantities: dict[str, int]) -> int:
+        limits: list[int] = []
+        for name in self.INGREDIENT_NAMES:
+            qty = int(requested_quantities[name])
+            if qty > 0:
+                limits.append(self.get_ingredient_total_units(name) // qty)
+        return min(limits) if limits else 0
 
     def has_enough_ingredients(
         self, requested_quantities: dict[str, int], batch_multiplier: int = 1
     ) -> bool:
-        return all(
-            self.get_ingredient_total_units(name) >= requested_quantities[name] * batch_multiplier
-            for name in self.INGREDIENT_NAMES
-        )
+        return self.max_portions_possible(requested_quantities) >= batch_multiplier
 
     # ------------------------------------------------------------------
-    # Tambah, Konsumsi FIFO, Bawa Bekal, & Penuaan Stok
+    # Tambah, Konsumsi FIFO, Smart-FIFO Meal Prep, Bekal, & Penuaan Stok
     # ------------------------------------------------------------------
     def add_grocery_pack(self, ingredient_name: str) -> None:
         ingredient_profile = self.ingredients_config[ingredient_name]
@@ -124,7 +243,7 @@ class PantryManager:
         self, requested_quantities: dict[str, int], batch_multiplier: int = 1
     ) -> None:
         for ingredient_name, quantity in requested_quantities.items():
-            units_to_consume = quantity * batch_multiplier
+            units_to_consume = int(quantity) * int(batch_multiplier)
             if units_to_consume <= 0:
                 continue
 
@@ -144,34 +263,53 @@ class PantryManager:
 
     def store_meal_prep_batch(
         self,
+        portions: int,
         hunger_delta: float,
         energy_delta: float,
         mood_delta: float,
         meal_signature: str,
+        portion_value_idr: float,
     ) -> None:
+        if portions <= 0:
+            return
         self.meal_prep_batches.append({
-            "portions": int(self.cooking_gates["meal_prep_batch_size"]),
+            "portions": int(portions),
             "remaining_shelf_life_steps": int(self.cooking_gates["meal_prep_shelf_life_steps"]),
-            "hunger_delta": hunger_delta,
-            "energy_delta": energy_delta,
-            "mood_delta": mood_delta,
-            "meal_signature": meal_signature,
+            "hunger_delta": float(hunger_delta),
+            "energy_delta": float(energy_delta),
+            "mood_delta": float(mood_delta),
+            "meal_signature": str(meal_signature),
+            "portion_value_idr": float(portion_value_idr),
         })
 
-    def pop_one_meal_prep_portion_fifo(self) -> dict[str, float | str] | None:
+    def pop_one_meal_prep_portion_smart_fifo(
+        self, avoid_signature: str | None = None
+    ) -> dict[str, float | str] | None:
+        """
+        Smart-FIFO: memprioritaskan batch tertua yang berbeda dari avoid_signature
+        agar variasi meal prep di kulkas tidak dipaksa memicu boredom.
+        """
         if not self.meal_prep_batches:
             return None
 
-        oldest_batch = self.meal_prep_batches[0]
+        selected_idx = 0
+        if avoid_signature is not None:
+            for idx, batch in enumerate(self.meal_prep_batches):
+                if str(batch["meal_signature"]) != avoid_signature:
+                    selected_idx = idx
+                    break
+
+        selected_batch = self.meal_prep_batches[selected_idx]
         portion_profile: dict[str, float | str] = {
-            "hunger_delta": float(oldest_batch["hunger_delta"]),
-            "energy_delta": float(oldest_batch["energy_delta"]),
-            "mood_delta": float(oldest_batch["mood_delta"]),
-            "meal_signature": str(oldest_batch["meal_signature"]),
+            "hunger_delta": float(selected_batch["hunger_delta"]),
+            "energy_delta": float(selected_batch["energy_delta"]),
+            "mood_delta": float(selected_batch["mood_delta"]),
+            "meal_signature": str(selected_batch["meal_signature"]),
+            "portion_value_idr": float(selected_batch.get("portion_value_idr", 0.0)),
         }
-        oldest_batch["portions"] = int(oldest_batch["portions"]) - 1
-        if int(oldest_batch["portions"]) <= 0:
-            self.meal_prep_batches.pop(0)
+        selected_batch["portions"] = int(selected_batch["portions"]) - 1
+        if int(selected_batch["portions"]) <= 0:
+            self.meal_prep_batches.pop(selected_idx)
         return portion_profile
 
     def pack_one_bekal_from_prep(self) -> dict[str, float | str] | None:
@@ -179,19 +317,32 @@ class PantryManager:
         max_portions = int(self.cooking_gates["max_packed_lunch_portions"])
         if len(self.packed_lunch_portions) >= max_portions:
             return None
-        portion_profile = self.pop_one_meal_prep_portion_fifo()
+        avoid_sig = (
+            str(self.packed_lunch_portions[-1]["meal_signature"])
+            if self.packed_lunch_portions
+            else self.last_meal_signature
+        )
+        portion_profile = self.pop_one_meal_prep_portion_smart_fifo(avoid_signature=avoid_sig)
         if portion_profile is None:
             return None
         self.packed_lunch_portions.append(portion_profile)
         return portion_profile
 
-    def pop_one_packed_lunch_portion(self) -> dict[str, float | str] | None:
+    def pop_one_packed_lunch_portion(
+        self, avoid_signature: str | None = None
+    ) -> dict[str, float | str] | None:
         if not self.packed_lunch_portions:
             return None
-        return self.packed_lunch_portions.pop(0)
+        selected_idx = 0
+        if avoid_signature is not None:
+            for idx, portion in enumerate(self.packed_lunch_portions):
+                if str(portion["meal_signature"]) != avoid_signature:
+                    selected_idx = idx
+                    break
+        return self.packed_lunch_portions.pop(selected_idx)
 
     def spoil_uneaten_packed_lunch_end_of_day(self) -> int:
-        """Bekal yang dibawa seharian dan tidak dimakan hingga akhir hari menjadi basi."""
+        """Bekal yang sudah dikeluarkan seharian dan tidak dimakan hingga akhir hari menjadi basi."""
         spoiled_bekal_count = len(self.packed_lunch_portions)
         if spoiled_bekal_count > 0:
             self.packed_lunch_portions = []
@@ -237,7 +388,7 @@ class PantryManager:
         active_side_dishes: list[str] = []
 
         for ingredient_name in self.INGREDIENT_NAMES:
-            quantity = ingredient_quantities[ingredient_name]
+            quantity = int(ingredient_quantities[ingredient_name])
             if quantity <= 0:
                 continue
             nutrition = self.ingredients_config[ingredient_name]["nutrition_per_unit"]
@@ -247,7 +398,7 @@ class PantryManager:
             if ingredient_name != "rice":
                 active_side_dishes.append(ingredient_name)
 
-        if len(active_side_dishes) == 0 and ingredient_quantities["rice"] > 0:
+        if len(active_side_dishes) == 0 and int(ingredient_quantities["rice"]) > 0:
             total_mood_delta += float(self.composition_rules["plain_rice_only_mood_penalty"])
             meal_signature = "plain_rice"
         else:
@@ -263,18 +414,28 @@ class PantryManager:
         return total_hunger_delta, total_energy_gain, total_mood_delta, meal_signature
 
     def compute_boredom_mood_penalty(self, meal_signature: str) -> float:
-        penalty_schedule = self.boredom_config["consecutive_meal_mood_penalty"]
+        window_size = int(self.boredom_config.get("recent_meal_window", 4))
+        penalty_schedule = self.boredom_config["recent_repeat_mood_penalty"]
+        consecutive_extra = float(self.boredom_config.get("consecutive_extra_mood_penalty", 0.0))
 
-        if meal_signature == self.last_meal_signature:
+        recent_repeats = self.get_recent_meal_count(meal_signature)
+        is_consecutive = meal_signature == self.last_meal_signature
+        if is_consecutive:
             self.consecutive_same_meal_count += 1
         else:
             self.last_meal_signature = meal_signature
             self.consecutive_same_meal_count = 0
 
-        penalty_index = min(self.consecutive_same_meal_count, len(penalty_schedule) - 1)
-        boredom_mood_penalty = float(penalty_schedule[penalty_index])
+        self.recent_meal_signatures.append(meal_signature)
+        if len(self.recent_meal_signatures) > window_size:
+            self.recent_meal_signatures = self.recent_meal_signatures[-window_size:]
 
-        if bool(self.boredom_config.get("apply_sensitivity_to_penalty", False)):
+        penalty_index = min(recent_repeats, len(penalty_schedule) - 1)
+        boredom_mood_penalty = float(penalty_schedule[penalty_index])
+        if is_consecutive and recent_repeats > 0:
+            boredom_mood_penalty += consecutive_extra
+
+        if bool(self.boredom_config.get("apply_sensitivity_to_penalty", True)):
             boredom_mood_penalty *= float(self.boredom_config["sensitivity"])
 
         return boredom_mood_penalty

@@ -7,26 +7,89 @@ VALID_COMMUTE_ROUTES = ("direct_ojol", "transit_ccws_ojol")
 
 
 def sample_idr_from_range(
-    random_generator: np.random.Generator, price_range: list[int] | tuple[int, int]
+    random_generator: np.random.Generator,
+    price_range: list[int] | tuple[int, int],
+    multiplier: float = 1.0,
 ) -> float:
-    minimum_price = int(price_range[0])
-    maximum_price = int(price_range[1])
+    minimum_price = int(round(int(price_range[0]) * multiplier))
+    maximum_price = int(round(int(price_range[1]) * multiplier))
     if minimum_price >= maximum_price:
         return float(minimum_price)
     return float(random_generator.integers(minimum_price, maximum_price + 1))
 
 
+def get_route_fare_bounds(
+    mobility_config: dict,
+    route_name: str,
+    current_ojol_tariff: str,
+    is_raining: bool,
+) -> tuple[float, float]:
+    route_profile = mobility_config["routes"][route_name]
+    tariff_key = "cost_peak_idr" if current_ojol_tariff == "peak" else "cost_normal_idr"
+    surge = float(mobility_config["rain_ojol_surge_multiplier"]) if is_raining else 1.0
+    low = float(round(int(route_profile[tariff_key][0]) * surge))
+    high = float(round(int(route_profile[tariff_key][1]) * surge))
+    return low, high
+
+
+def compute_contextual_minimarket_probability(
+    base_probability: float,
+    hunger: float,
+    effective_climate: str,
+    current_day: int,
+    finance_manager: FinanceManager,
+    finance_config: dict,
+    mobility_config: dict,
+) -> float:
+    """
+    Menghitung peluang jajan impulsif minimarket secara kontekstual:
+    dipengaruhi rasa lapar, cuaca panas terik, impulsivitas akhir bulan,
+    dan kontrol diri saat saldo mulai menipis.
+    """
+    impulse_cfg = mobility_config["campus_hub_rules"]["minimarket_impulse_item"]
+    probability = float(base_probability)
+
+    if hunger > 45.0:
+        probability += float(impulse_cfg["hungry_prob_bonus"])
+    if effective_climate == "midday":
+        probability += float(impulse_cfg["midday_prob_bonus"])
+
+    late_month_cfg = finance_config["late_month_impulsivity"]
+    if current_day >= int(late_month_cfg["start_day"]):
+        probability += float(impulse_cfg["late_month_prob_bonus"]) * float(
+            late_month_cfg["weight"]
+        )
+
+    if finance_manager.is_balance_low():
+        probability *= float(impulse_cfg["low_balance_prob_multiplier"])
+
+    return float(np.clip(probability, 0.0, 0.90))
+
+
 def try_minimarket_impulse(
     random_generator: np.random.Generator,
     finance_manager: FinanceManager,
+    biometrics_state: BiometricsState,
+    finance_config: dict,
     mobility_config: dict,
-    temptation_probability: float,
+    base_temptation_probability: float,
+    effective_climate: str,
+    current_day: int,
 ) -> tuple[bool, float, float]:
     """
-    Mengevaluasi peluang jajan impulsif di minimarket area CCWS.
+    Mengevaluasi peluang jajan impulsif di minimarket area CCWS secara kontekstual.
     Mengembalikan (jadi_jajan, hunger_delta, mood_delta).
     """
-    if random_generator.random() >= temptation_probability:
+    probability = compute_contextual_minimarket_probability(
+        base_probability=base_temptation_probability,
+        hunger=biometrics_state.hunger,
+        effective_climate=effective_climate,
+        current_day=current_day,
+        finance_manager=finance_manager,
+        finance_config=finance_config,
+        mobility_config=mobility_config,
+    )
+    if random_generator.random() >= probability:
         return False, 0.0, 0.0
 
     impulse_config = mobility_config["campus_hub_rules"]["minimarket_impulse_item"]
@@ -43,51 +106,46 @@ def try_minimarket_impulse(
 def execute_commute_trip(
     random_generator: np.random.Generator,
     finance_manager: FinanceManager,
+    biometrics_state: BiometricsState,
+    finance_config: dict,
     mobility_config: dict,
     rewards_config: dict,
     requested_route_name: str,
     destination_location: str,
     current_climate: str,
     current_ojol_tariff: str,
-    waited_until_evening: bool,
+    is_raining: bool,
+    current_day: int,
     force_return_if_broke: bool = False,
 ) -> dict[str, object]:
     """
     Menjalankan satu perjalanan apartemen <-> kampus menggunakan direct_ojol atau
-    transit_ccws_ojol (tanpa full_walk) dari saldo operasional tunggal.
+    transit_ccws_ojol, memperhitungkan jam sibuk Surabaya, panas midday (heat_sensitivity),
+    hujan acak ringan (surge ojol + beban jalan kaki), dan godaan minimarket kontekstual.
     """
-    effective_climate = current_climate
-    effective_tariff = current_ojol_tariff
-    consumed_evening_wait = False
-
-    wait_rules = mobility_config["campus_hub_rules"]["wait_at_department_until_evening"]
-    if waited_until_evening and destination_location == "apartment":
-        if bool(wait_rules["avoids_midday_heat"]):
-            effective_climate = "cool"
-        if bool(wait_rules["avoids_peak_ojol"]):
-            effective_tariff = "normal"
-        consumed_evening_wait = True
-
+    effective_climate = "rain" if is_raining else current_climate
     routes_config = mobility_config["routes"]
-    selected_route_name = requested_route_name
-    route_profile = routes_config[selected_route_name]
-    tariff_key = "cost_peak_idr" if effective_tariff == "peak" else "cost_normal_idr"
-    fare_idr = sample_idr_from_range(random_generator, route_profile[tariff_key])
+    selected_route_name = (
+        requested_route_name if requested_route_name in VALID_COMMUTE_ROUTES else "transit_ccws_ojol"
+    )
 
-    payment_succeeded = finance_manager.pay(fare_idr, category="transport")
+    def _try_pay_route(route_name: str) -> bool:
+        min_fare, max_fare = get_route_fare_bounds(
+            mobility_config, route_name, current_ojol_tariff, is_raining
+        )
+        if not finance_manager.can_afford(min_fare):
+            return False
+        sampled_fare = sample_idr_from_range(random_generator, (int(min_fare), int(max_fare)))
+        # Jika saldo cukup untuk batas bawah namun di bawah random draw, gunakan batas saldo
+        actual_fare = min(sampled_fare, finance_manager.balance_idr)
+        return finance_manager.pay(actual_fare, category="transport")
+
+    payment_succeeded = _try_pay_route(selected_route_name)
 
     # Jika saldo tidak cukup untuk direct_ojol, coba turun ke transit_ccws_ojol
     if not payment_succeeded and selected_route_name == "direct_ojol":
         selected_route_name = "transit_ccws_ojol"
-        route_profile = routes_config[selected_route_name]
-        fare_idr = sample_idr_from_range(random_generator, route_profile[tariff_key])
-        payment_succeeded = finance_manager.pay(fare_idr, category="transport")
-
-    energy_delta = 0.0
-    mood_delta = 0.0
-    hunger_delta = 0.0
-    emergency_reward_penalty = 0.0
-    bought_minimarket_impulse = False
+        payment_succeeded = _try_pay_route(selected_route_name)
 
     if not payment_succeeded:
         if force_return_if_broke and destination_location == "apartment":
@@ -104,7 +162,6 @@ def execute_commute_trip(
                 "hunger_delta": 0.0,
                 "reward_penalty": emergency_reward_penalty,
                 "bought_minimarket_impulse": False,
-                "consumed_evening_wait": consumed_evening_wait,
             }
 
         return {
@@ -116,24 +173,47 @@ def execute_commute_trip(
             "hunger_delta": 0.0,
             "reward_penalty": 0.0,
             "bought_minimarket_impulse": False,
-            "consumed_evening_wait": False,
         }
 
-    mood_key = "mood_delta_midday" if effective_climate == "midday" else "mood_delta_cool"
+    route_profile = routes_config[selected_route_name]
+    heat_sensitivity = float(mobility_config["heat_sensitivity"])
+    energy_delta = 0.0
+    mood_delta = 0.0
+    hunger_delta = 0.0
+    bought_minimarket_impulse = False
+
     if selected_route_name == "direct_ojol":
         energy_delta -= float(route_profile["energy_cost"])
-        mood_delta += float(route_profile[mood_key])
+        if effective_climate == "rain":
+            mood_delta += float(route_profile["mood_delta_rain"])
+        elif effective_climate == "midday":
+            mood_delta += float(route_profile["mood_delta_midday"]) * heat_sensitivity
+        else:
+            mood_delta += float(route_profile["mood_delta_cool"])
     else:
-        energy_key = "energy_cost_midday" if effective_climate == "midday" else "energy_cost_cool"
-        energy_delta -= float(route_profile[energy_key])
-        mood_delta += float(route_profile[mood_key])
+        if effective_climate == "midday":
+            energy_delta -= float(route_profile["energy_cost_midday"]) * heat_sensitivity
+            mood_delta += float(route_profile["mood_delta_midday"]) * heat_sensitivity
+        elif effective_climate == "rain":
+            energy_delta -= float(route_profile["energy_cost_cool"]) + float(
+                mobility_config["rain_walk_extra_energy_cost"]
+            )
+            mood_delta += float(route_profile["mood_delta_cool"]) + float(
+                mobility_config["rain_walk_extra_mood_delta"]
+            )
+        else:
+            energy_delta -= float(route_profile["energy_cost_cool"])
+            mood_delta += float(route_profile["mood_delta_cool"])
 
-        temptation_probability = float(route_profile["minimarket_temptation_prob"])
         bought_minimarket_impulse, impulse_hunger, impulse_mood = try_minimarket_impulse(
             random_generator=random_generator,
             finance_manager=finance_manager,
+            biometrics_state=biometrics_state,
+            finance_config=finance_config,
             mobility_config=mobility_config,
-            temptation_probability=temptation_probability,
+            base_temptation_probability=float(route_profile["minimarket_base_temptation_prob"]),
+            effective_climate=effective_climate,
+            current_day=current_day,
         )
         hunger_delta += impulse_hunger
         mood_delta += impulse_mood
@@ -145,35 +225,39 @@ def execute_commute_trip(
         "energy_delta": energy_delta,
         "mood_delta": mood_delta,
         "hunger_delta": hunger_delta,
-        "reward_penalty": emergency_reward_penalty,
+        "reward_penalty": 0.0,
         "bought_minimarket_impulse": bought_minimarket_impulse,
-        "consumed_evening_wait": consumed_evening_wait,
     }
 
 
 def resolve_mobility_phase(
     current_location: str,
-    waited_until_evening: bool,
     effective_activity: str,
-    requested_mobility: str,
+    requested_route: str,
     is_class_scheduled_now: bool,
     step_in_day: int,
     steps_per_day: int,
     current_climate: str,
     current_ojol_tariff: str,
+    is_raining: bool,
+    current_day: int,
     random_generator: np.random.Generator,
     finance_manager: FinanceManager,
     biometrics_state: BiometricsState,
+    finance_config: dict,
     mobility_config: dict,
     rewards_config: dict,
     step_events: dict[str, object],
-) -> tuple[str, bool, str, float]:
+) -> tuple[str, str, float]:
     """
-    Menentukan perpindahan apartemen <-> kampus dengan aturan realistis:
-    1. Jam Malam (step terakhir): kampus tutup, agen di kampus wajib pulang ke apartemen.
-    2. attend_class hanya valid jika benar-benar ada jadwal kuliah pada step ini.
-    3. Perjalanan apartemen <-> kampus hanya bisa memakai direct_ojol atau transit_ccws_ojol.
-    4. Di kampus siang/sore tanpa pulang tidak boleh rest_or_sleep/room_study/grocery_shop/night_cramming.
+    Menentukan perpindahan apartemen <-> kampus secara terpadu dengan aktivitas tujuan:
+    1. Aktivitas kampus (attend_class, ccws_stay, wait_at_department) dari apartemen otomatis
+       berangkat menggunakan requested_route (direct_ojol / transit_ccws_ojol).
+    2. Aktivitas apartemen dari kampus otomatis pulang menggunakan requested_route.
+    3. cafe_session tidak memicu double-commute (ongkos transport ke kafe ditangani 1x di
+       execute_activity_action); jika cafe_session dilakukan pada malam hari dari kampus,
+       agen langsung berakhir pulang di apartemen.
+    4. Jam malam (step terakhir): kampus tutup, agen di kampus wajib pulang ke apartemen.
     """
     campus_activities = {"attend_class", "ccws_stay", "wait_at_department"}
     apartment_only_activities = {"room_study", "grocery_shop", "rest_or_sleep", "night_cramming"}
@@ -183,100 +267,76 @@ def resolve_mobility_phase(
         effective_activity = "rest_or_sleep"
 
     if effective_activity == "attend_class" and not is_class_scheduled_now:
-        effective_activity = "rest_or_sleep"
+        effective_activity = "rest_or_sleep" if current_location == "apartment" else "wait_at_department"
 
     if effective_activity == "night_cramming" and not is_night:
         effective_activity = "room_study"
 
-    requires_campus_location = effective_activity in campus_activities
     executed_route = "stay"
     mobility_reward_penalty = 0.0
     updated_location = current_location
-    updated_waited_until_evening = waited_until_evening
 
-    if requires_campus_location and current_location == "apartment":
-        if requested_mobility not in VALID_COMMUTE_ROUTES:
-            effective_activity = "rest_or_sleep"
-            step_events["campus_activity_cancelled_no_transport"] = True
+    if effective_activity in campus_activities and current_location == "apartment":
+        trip_result = execute_commute_trip(
+            random_generator=random_generator,
+            finance_manager=finance_manager,
+            biometrics_state=biometrics_state,
+            finance_config=finance_config,
+            mobility_config=mobility_config,
+            rewards_config=rewards_config,
+            requested_route_name=requested_route,
+            destination_location="campus",
+            current_climate=current_climate,
+            current_ojol_tariff=current_ojol_tariff,
+            is_raining=is_raining,
+            current_day=current_day,
+            force_return_if_broke=False,
+        )
+        if bool(trip_result["trip_succeeded"]):
+            updated_location, executed_route = _apply_trip_effects(
+                trip_result, biometrics_state, step_events
+            )
+            mobility_reward_penalty += float(trip_result["reward_penalty"])
         else:
-            trip_result = execute_commute_trip(
-                random_generator=random_generator,
-                finance_manager=finance_manager,
-                mobility_config=mobility_config,
-                rewards_config=rewards_config,
-                requested_route_name=requested_mobility,
-                destination_location="campus",
-                current_climate=current_climate,
-                current_ojol_tariff=current_ojol_tariff,
-                waited_until_evening=waited_until_evening,
-                force_return_if_broke=False,
-            )
-            if bool(trip_result["trip_succeeded"]):
-                updated_location, updated_waited_until_evening, executed_route = (
-                    _apply_trip_effects(
-                        trip_result, biometrics_state, waited_until_evening, step_events
-                    )
-                )
-                mobility_reward_penalty += float(trip_result["reward_penalty"])
-            else:
-                effective_activity = "rest_or_sleep"
-                step_events["campus_activity_cancelled_insufficient_funds"] = True
+            effective_activity = "rest_or_sleep"
+            step_events["campus_activity_cancelled_insufficient_funds"] = True
 
-    elif not requires_campus_location and current_location == "campus":
-        should_return_home = (requested_mobility in VALID_COMMUTE_ROUTES) or is_night
-        if should_return_home:
-            return_route = (
-                requested_mobility
-                if requested_mobility in VALID_COMMUTE_ROUTES
-                else "transit_ccws_ojol"
+    elif effective_activity in apartment_only_activities and current_location == "campus":
+        trip_result = execute_commute_trip(
+            random_generator=random_generator,
+            finance_manager=finance_manager,
+            biometrics_state=biometrics_state,
+            finance_config=finance_config,
+            mobility_config=mobility_config,
+            rewards_config=rewards_config,
+            requested_route_name=requested_route,
+            destination_location="apartment",
+            current_climate=current_climate,
+            current_ojol_tariff=current_ojol_tariff,
+            is_raining=is_raining,
+            current_day=current_day,
+            force_return_if_broke=is_night,
+        )
+        if bool(trip_result["trip_succeeded"]):
+            updated_location, executed_route = _apply_trip_effects(
+                trip_result, biometrics_state, step_events
             )
-            trip_result = execute_commute_trip(
-                random_generator=random_generator,
-                finance_manager=finance_manager,
-                mobility_config=mobility_config,
-                rewards_config=rewards_config,
-                requested_route_name=return_route,
-                destination_location="apartment",
-                current_climate=current_climate,
-                current_ojol_tariff=current_ojol_tariff,
-                waited_until_evening=waited_until_evening,
-                force_return_if_broke=is_night,
-            )
-            if bool(trip_result["trip_succeeded"]):
-                updated_location, updated_waited_until_evening, executed_route = (
-                    _apply_trip_effects(
-                        trip_result, biometrics_state, waited_until_evening, step_events
-                    )
-                )
-                mobility_reward_penalty += float(trip_result["reward_penalty"])
-            elif effective_activity in apartment_only_activities:
-                effective_activity = "wait_at_department"
-                step_events["return_cancelled_insufficient_funds"] = True
-        elif effective_activity in apartment_only_activities:
+            mobility_reward_penalty += float(trip_result["reward_penalty"])
+        else:
             effective_activity = "wait_at_department"
+            step_events["return_cancelled_insufficient_funds"] = True
 
     step_events["executed_route"] = executed_route
-    return (
-        updated_location,
-        updated_waited_until_evening,
-        effective_activity,
-        mobility_reward_penalty,
-    )
+    return updated_location, effective_activity, mobility_reward_penalty
 
 
 def _apply_trip_effects(
     trip_result: dict[str, object],
     biometrics_state: BiometricsState,
-    waited_until_evening: bool,
     step_events: dict[str, object],
-) -> tuple[str, bool, str]:
+) -> tuple[str, str]:
     biometrics_state.energy += float(trip_result["energy_delta"])
     biometrics_state.mood += float(trip_result["mood_delta"])
     biometrics_state.hunger += float(trip_result["hunger_delta"])
-    updated_waited = False if bool(trip_result["consumed_evening_wait"]) else waited_until_evening
     step_events["transit_minimarket_impulse"] = bool(trip_result["bought_minimarket_impulse"])
-    return (
-        str(trip_result["destination_location"]),
-        updated_waited,
-        str(trip_result["executed_route"]),
-    )
+    return str(trip_result["destination_location"]), str(trip_result["executed_route"])

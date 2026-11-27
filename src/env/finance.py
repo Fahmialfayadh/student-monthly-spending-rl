@@ -1,19 +1,24 @@
 class FinanceManager:
     """
-    Mengelola satu saldo operasional bulanan tunggal (balance_idr) dan mencatat
-    rincian pengeluaran per kategori (transport, belanja dapur, makan luar,
-    kafe, dan jajan impulsif) agar agen RL bebas menemukan alokasi terbaik.
+    Mengelola satu saldo operasional bulanan tunggal (balance_idr) yang dihitung
+    otomatis dari monthly_budget - sum(fixed_expenses), serta mencatat rincian
+    pengeluaran per kategori agar agen RL bebas menemukan alokasi terbaik.
     """
 
     def __init__(self, finance_config: dict):
         self.finance_config = finance_config
         self.monthly_budget_idr = float(finance_config["monthly_budget"])
+        fixed_expenses = finance_config.get("fixed_expenses", {})
+        self.total_fixed_expenses_idr = float(sum(float(v) for v in fixed_expenses.values()))
+        self.initial_operational_budget_idr = max(
+            0.0, self.monthly_budget_idr - self.total_fixed_expenses_idr
+        )
         self.balance_idr = 0.0
         self.spent_by_category_idr: dict[str, float] = {}
         self.reset()
 
     def reset(self) -> None:
-        self.balance_idr = float(self.finance_config["initial_operational_budget"])
+        self.balance_idr = float(self.initial_operational_budget_idr)
         self.spent_by_category_idr = {
             "transport": 0.0,
             "grocery": 0.0,
@@ -36,7 +41,9 @@ class FinanceManager:
         if self.balance_idr < amount_idr:
             return False
         self.balance_idr -= amount_idr
-        self.spent_by_category_idr[category] = self.spent_by_category_idr.get(category, 0.0) + amount_idr
+        self.spent_by_category_idr[category] = (
+            self.spent_by_category_idr.get(category, 0.0) + amount_idr
+        )
         return True
 
     def drain_remaining_for_emergency(self, category: str = "transport") -> float:
@@ -51,3 +58,7 @@ class FinanceManager:
 
     def get_spending_summary(self) -> dict[str, float]:
         return dict(self.spent_by_category_idr)
+
+    def get_total_spent_idr(self) -> float:
+        """Total pengeluaran operasional bulan berjalan."""
+        return sum(self.spent_by_category_idr.values())

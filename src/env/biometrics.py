@@ -4,8 +4,8 @@ import numpy as np
 class BiometricsState:
     """
     Menyimpan dan memperbarui kondisi fisiologis serta psikologis mahasiswa:
-    energy, hunger, mood, academic_stress, cafe_craving, buff kafe, dan
-    counter kelaparan fatal.
+    energy, hunger, mood, academic_stress, cafe_craving (dorongan keluar kamar /
+    CCWS / kafe), buff suasana, dan counter kelaparan fatal.
     """
 
     def __init__(self, biometrics_config: dict, termination_config: dict):
@@ -21,6 +21,8 @@ class BiometricsState:
         self.academic_stress = 0.0
         self.cafe_craving = 0.0
         self.cafe_buff_remaining_steps = 0
+        self.cafe_buff_rate_multiplier = 1.0
+        self.ccws_visits_today = 0
         self.consecutive_fatal_hunger_steps = 0
 
     def reset(self) -> None:
@@ -31,6 +33,8 @@ class BiometricsState:
         self.academic_stress = float(initial_state["academic_stress"])
         self.cafe_craving = float(initial_state["cafe_craving"])
         self.cafe_buff_remaining_steps = 0
+        self.cafe_buff_rate_multiplier = 1.0
+        self.ccws_visits_today = 0
         self.consecutive_fatal_hunger_steps = 0
 
     def is_mood_burned_out(self) -> bool:
@@ -39,10 +43,24 @@ class BiometricsState:
     def is_stress_burned_out(self) -> bool:
         return self.academic_stress >= float(self.termination_config["burnout_stress_threshold"])
 
-    def get_study_efficiency(self) -> float:
+    def get_room_study_efficiency(self) -> float:
+        """Efisiensi belajar di kamar turun drastis bila jenuh/craving keluar kamar tinggi."""
+        if self.cafe_craving > float(self.craving_config["high_distraction_threshold"]):
+            return float(self.craving_config["high_distraction_room_study_efficiency"])
         if self.cafe_craving > float(self.craving_config["distraction_threshold"]):
-            return float(self.craving_config["distraction_study_efficiency_multiplier"])
+            return float(self.craving_config["distraction_room_study_efficiency"])
         return 1.0
+
+    def apply_craving_buff(self, duration_steps: int, rate_multiplier: float) -> None:
+        if duration_steps <= 0:
+            return
+        if duration_steps > self.cafe_buff_remaining_steps:
+            self.cafe_buff_remaining_steps = int(duration_steps)
+            self.cafe_buff_rate_multiplier = float(rate_multiplier)
+        elif duration_steps == self.cafe_buff_remaining_steps:
+            self.cafe_buff_rate_multiplier = min(
+                self.cafe_buff_rate_multiplier, float(rate_multiplier)
+            )
 
     def clamp_all_values(self) -> None:
         min_bound, max_bound = self.state_bounds
@@ -59,6 +77,7 @@ class BiometricsState:
         steps_per_day: int,
         step_hunger_gain: float,
         current_climate: str,
+        current_location: str,
         executed_activity: str,
         finance_config: dict,
         rewards_config: dict,
@@ -66,9 +85,8 @@ class BiometricsState:
     ) -> float:
         """
         Menjalankan dinamika pasif akhir step:
-        - Tidur malam otomatis (22:30-06:00) setelah step malam selesai; hanya
-          dianggap begadang jika agen secara eksplisit memilih night_cramming.
-        - Kenaikan lapar per blok waktu (step_hunger_gain), craving, distraksi,
+        - Tidur malam otomatis (22:30-06:00) setelah step malam selesai tanpa double-recovery.
+        - Kenaikan lapar per blok waktu, craving keluar kamar/kafe, distraksi 2-tier,
           starvation, dan clamp nilai ke [0, 100].
         """
         starvation_reward_penalty = 0.0
@@ -90,12 +108,18 @@ class BiometricsState:
                     self.energy + float(self.step_dynamics["sleep_normal_energy_gain"]),
                 )
                 self.mood += float(self.step_dynamics["sleep_normal_mood_gain"])
+            self.hunger += float(self.step_dynamics.get("overnight_hunger_gain", 0.0))
+            self.ccws_visits_today = 0
 
         # Kenaikan lapar sesuai durasi blok waktu
         self.hunger += float(step_hunger_gain)
 
-        # Kenaikan dorongan ngopi/ngafe
-        craving_gain = float(self.craving_config["base_craving_gain_per_step"])
+        # Kenaikan dorongan keluar kamar / CCWS / ngafe
+        if current_location == "apartment":
+            craving_gain = float(self.craving_config["base_craving_gain_apartment_per_step"])
+        else:
+            craving_gain = float(self.craving_config["base_craving_gain_campus_per_step"])
+
         if (
             self.academic_stress > float(self.craving_config["stress_bonus_threshold"])
             or current_climate == "midday"
@@ -104,18 +128,22 @@ class BiometricsState:
 
         impulsivity_config = finance_config["late_month_impulsivity"]
         if current_day >= int(impulsivity_config["start_day"]):
-            craving_gain *= float(impulsivity_config["craving_gain_multiplier"])
+            craving_gain *= 1.0 + float(impulsivity_config["weight"])
 
         if self.cafe_buff_remaining_steps > 0:
-            craving_gain *= float(
-                self.craving_config["cafe_session"]["buff_craving_rate_multiplier"]
-            )
+            craving_gain *= self.cafe_buff_rate_multiplier
             self.cafe_buff_remaining_steps -= 1
+            if self.cafe_buff_remaining_steps <= 0:
+                self.cafe_buff_rate_multiplier = 1.0
 
-        if executed_activity != "cafe_session":
+        if executed_activity not in ("cafe_session", "ccws_stay"):
             self.cafe_craving += craving_gain
 
-        if self.cafe_craving > float(self.craving_config["distraction_threshold"]):
+        # Penalti mood 2-tier bila craving dibiarkan tinggi
+        if self.cafe_craving > float(self.craving_config["high_distraction_threshold"]):
+            self.mood += float(self.craving_config["high_distraction_mood_penalty_per_step"])
+            step_events["distracted_by_craving"] = True
+        elif self.cafe_craving > float(self.craving_config["distraction_threshold"]):
             self.mood += float(self.craving_config["distraction_mood_penalty_per_step"])
             step_events["distracted_by_craving"] = True
 
@@ -145,6 +173,10 @@ class BiometricsState:
         wellbeing_reward += float(wellbeing_weights["mood_weight"]) * self.mood
         wellbeing_reward += float(wellbeing_weights["hunger_penalty_weight"]) * self.hunger
         wellbeing_reward += float(wellbeing_weights["stress_penalty_weight"]) * self.academic_stress
+
+        distraction_threshold = float(self.craving_config["distraction_threshold"])
+        excess_craving = max(0.0, self.cafe_craving - distraction_threshold)
+        wellbeing_reward += float(wellbeing_weights.get("excess_craving_penalty_weight", 0.0)) * excess_craving
 
         if self.is_mood_burned_out():
             wellbeing_reward += float(critical_penalties["burnout_mood_per_step"])
