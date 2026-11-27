@@ -144,6 +144,7 @@ class StudentLifeEnv(gym.Env):
 
         self.current_step = 0
         self.current_location = "apartment"
+        self.current_campus_sub_location: str | None = None
         self.current_is_raining = False
 
     @property
@@ -196,6 +197,7 @@ class StudentLifeEnv(gym.Env):
 
         self.current_step = 0
         self.current_location = "apartment"
+        self.current_campus_sub_location = None
 
         self.finance.reset()
         self.biometrics.reset()
@@ -326,8 +328,14 @@ class StudentLifeEnv(gym.Env):
                 )
 
         # 3b. Fase Mobilitas (src/env/mobility.py)
-        self.current_location, effective_activity, mobility_reward = resolve_mobility_phase(
+        (
+            self.current_location,
+            self.current_campus_sub_location,
+            effective_activity,
+            mobility_reward,
+        ) = resolve_mobility_phase(
             current_location=self.current_location,
+            current_campus_sub_location=self.current_campus_sub_location,
             effective_activity=effective_activity,
             requested_route=str(parsed_action["route"]),
             is_class_scheduled_now=is_class_scheduled_now,
@@ -387,6 +395,12 @@ class StudentLifeEnv(gym.Env):
             pantry_config=self.pantry_config,
             step_events=step_events,
         )
+        if self.current_location == "apartment":
+            self.current_campus_sub_location = None
+        elif executed_activity == "ccws_stay":
+            self.current_campus_sub_location = "ccws"
+        elif executed_activity in ("attend_class", "wait_at_department"):
+            self.current_campus_sub_location = "department"
         step_events["executed_activity"] = executed_activity
 
         if is_class_scheduled_now:

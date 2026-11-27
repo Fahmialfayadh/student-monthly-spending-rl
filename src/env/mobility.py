@@ -32,6 +32,35 @@ def get_route_fare_bounds(
     return low, high
 
 
+def apply_ccws_department_walk(
+    biometrics_state: BiometricsState,
+    mobility_config: dict,
+    current_climate: str,
+    is_raining: bool,
+    step_events: dict[str, object],
+) -> None:
+    """
+    Menerapkan satu config tunggal beban jalan kaki 1.5 km (CCWS <-> Departemen Informatika)
+    baik sebagai bagian dari transit_ccws_ojol maupun saat berpindah antar gedung di kampus.
+    """
+    walk_cfg = mobility_config["ccws_department_walk_1_5km"]
+    heat_sensitivity = float(mobility_config["heat_sensitivity"])
+
+    if is_raining:
+        energy_cost = float(walk_cfg["energy_cost_cool"]) + float(walk_cfg["extra_energy_cost_rain"])
+        mood_delta = float(walk_cfg["mood_delta_cool"]) + float(walk_cfg["extra_mood_delta_rain"])
+    elif current_climate == "midday":
+        energy_cost = float(walk_cfg["energy_cost_midday"]) * heat_sensitivity
+        mood_delta = float(walk_cfg["mood_delta_midday"]) * heat_sensitivity
+    else:
+        energy_cost = float(walk_cfg["energy_cost_cool"])
+        mood_delta = float(walk_cfg["mood_delta_cool"])
+
+    biometrics_state.energy -= energy_cost
+    biometrics_state.mood += mood_delta
+    step_events["walked_1_5km_ccws_dept"] = True
+
+
 def compute_contextual_minimarket_probability(
     base_probability: float,
     hunger: float,
@@ -119,9 +148,9 @@ def execute_commute_trip(
     force_return_if_broke: bool = False,
 ) -> dict[str, object]:
     """
-    Menjalankan satu perjalanan apartemen <-> kampus menggunakan direct_ojol atau
-    transit_ccws_ojol, memperhitungkan jam sibuk Surabaya, panas midday (heat_sensitivity),
-    hujan acak ringan (surge ojol + beban jalan kaki), dan godaan minimarket kontekstual.
+    Menjalankan bagian naik ojol (Apartemen <-> Departemen atau Apartemen <-> CCWS).
+    Beban jalan kaki 1.5 km CCWS <-> Departemen ditangani terpisah melalui satu config
+    tunggal `ccws_department_walk_1_5km` agar tidak ganda maupun hilang.
     """
     effective_climate = "rain" if is_raining else current_climate
     routes_config = mobility_config["routes"]
@@ -136,13 +165,11 @@ def execute_commute_trip(
         if not finance_manager.can_afford(min_fare):
             return False
         sampled_fare = sample_idr_from_range(random_generator, (int(min_fare), int(max_fare)))
-        # Jika saldo cukup untuk batas bawah namun di bawah random draw, gunakan batas saldo
         actual_fare = min(sampled_fare, finance_manager.balance_idr)
         return finance_manager.pay(actual_fare, category="transport")
 
     payment_succeeded = _try_pay_route(selected_route_name)
 
-    # Jika saldo tidak cukup untuk direct_ojol, coba turun ke transit_ccws_ojol
     if not payment_succeeded and selected_route_name == "direct_ojol":
         selected_route_name = "transit_ccws_ojol"
         payment_succeeded = _try_pay_route(selected_route_name)
@@ -177,34 +204,18 @@ def execute_commute_trip(
 
     route_profile = routes_config[selected_route_name]
     heat_sensitivity = float(mobility_config["heat_sensitivity"])
-    energy_delta = 0.0
-    mood_delta = 0.0
+    energy_delta = -float(route_profile["energy_cost"])
+
+    if effective_climate == "rain":
+        mood_delta = float(route_profile["mood_delta_rain"])
+    elif effective_climate == "midday":
+        mood_delta = float(route_profile["mood_delta_midday"]) * heat_sensitivity
+    else:
+        mood_delta = float(route_profile["mood_delta_cool"])
+
     hunger_delta = 0.0
     bought_minimarket_impulse = False
-
-    if selected_route_name == "direct_ojol":
-        energy_delta -= float(route_profile["energy_cost"])
-        if effective_climate == "rain":
-            mood_delta += float(route_profile["mood_delta_rain"])
-        elif effective_climate == "midday":
-            mood_delta += float(route_profile["mood_delta_midday"]) * heat_sensitivity
-        else:
-            mood_delta += float(route_profile["mood_delta_cool"])
-    else:
-        if effective_climate == "midday":
-            energy_delta -= float(route_profile["energy_cost_midday"]) * heat_sensitivity
-            mood_delta += float(route_profile["mood_delta_midday"]) * heat_sensitivity
-        elif effective_climate == "rain":
-            energy_delta -= float(route_profile["energy_cost_cool"]) + float(
-                mobility_config["rain_walk_extra_energy_cost"]
-            )
-            mood_delta += float(route_profile["mood_delta_cool"]) + float(
-                mobility_config["rain_walk_extra_mood_delta"]
-            )
-        else:
-            energy_delta -= float(route_profile["energy_cost_cool"])
-            mood_delta += float(route_profile["mood_delta_cool"])
-
+    if selected_route_name == "transit_ccws_ojol":
         bought_minimarket_impulse, impulse_hunger, impulse_mood = try_minimarket_impulse(
             random_generator=random_generator,
             finance_manager=finance_manager,
@@ -232,6 +243,7 @@ def execute_commute_trip(
 
 def resolve_mobility_phase(
     current_location: str,
+    current_campus_sub_location: str | None,
     effective_activity: str,
     requested_route: str,
     is_class_scheduled_now: bool,
@@ -248,16 +260,13 @@ def resolve_mobility_phase(
     mobility_config: dict,
     rewards_config: dict,
     step_events: dict[str, object],
-) -> tuple[str, str, float]:
+) -> tuple[str, str | None, str, float]:
     """
-    Menentukan perpindahan apartemen <-> kampus secara terpadu dengan aktivitas tujuan:
-    1. Aktivitas kampus (attend_class, ccws_stay, wait_at_department) dari apartemen otomatis
-       berangkat menggunakan requested_route (direct_ojol / transit_ccws_ojol).
-    2. Aktivitas apartemen dari kampus otomatis pulang menggunakan requested_route.
-    3. cafe_session tidak memicu double-commute (ongkos transport ke kafe ditangani 1x di
-       execute_activity_action); jika cafe_session dilakukan pada malam hari dari kampus,
-       agen langsung berakhir pulang di apartemen.
-    4. Jam malam (step terakhir): kampus tutup, agen di kampus wajib pulang ke apartemen.
+    Menentukan perpindahan apartemen <-> kampus dan antar sub-lokasi kampus (ccws <-> department):
+    - direct_ojol mendarat di / berangkat dari 'department'.
+    - transit_ccws_ojol mendarat di / berangkat dari 'ccws'.
+    - Setiap perpindahan 'ccws' <-> 'department' (baik saat transit maupun pindah aktivitas di kampus)
+      memakai satu config tunggal `ccws_department_walk_1_5km` (Rp 0, beban jalan kaki 1.5 km).
     """
     campus_activities = {"attend_class", "ccws_stay", "wait_at_department"}
     apartment_only_activities = {"room_study", "grocery_shop", "rest_or_sleep", "night_cramming"}
@@ -267,7 +276,9 @@ def resolve_mobility_phase(
         effective_activity = "rest_or_sleep"
 
     if effective_activity == "attend_class" and not is_class_scheduled_now:
-        effective_activity = "rest_or_sleep" if current_location == "apartment" else "wait_at_department"
+        effective_activity = (
+            "rest_or_sleep" if current_location == "apartment" else "wait_at_department"
+        )
 
     if effective_activity == "night_cramming" and not is_night:
         effective_activity = "room_study"
@@ -275,6 +286,13 @@ def resolve_mobility_phase(
     executed_route = "stay"
     mobility_reward_penalty = 0.0
     updated_location = current_location
+    updated_sub_location = current_campus_sub_location
+
+    target_sub_location = (
+        "ccws"
+        if effective_activity == "ccws_stay"
+        else ("department" if effective_activity in ("attend_class", "wait_at_department") else None)
+    )
 
     if effective_activity in campus_activities and current_location == "apartment":
         trip_result = execute_commute_trip(
@@ -297,11 +315,33 @@ def resolve_mobility_phase(
                 trip_result, biometrics_state, step_events
             )
             mobility_reward_penalty += float(trip_result["reward_penalty"])
+            landed_sub = "department" if executed_route == "direct_ojol" else "ccws"
+            if target_sub_location is not None and landed_sub != target_sub_location:
+                apply_ccws_department_walk(
+                    biometrics_state, mobility_config, current_climate, is_raining, step_events
+                )
+            updated_sub_location = target_sub_location or landed_sub
         else:
             effective_activity = "rest_or_sleep"
             step_events["campus_activity_cancelled_insufficient_funds"] = True
 
+    elif effective_activity in campus_activities and current_location == "campus":
+        current_sub = updated_sub_location or "department"
+        if target_sub_location is not None and current_sub != target_sub_location:
+            apply_ccws_department_walk(
+                biometrics_state, mobility_config, current_climate, is_raining, step_events
+            )
+            updated_sub_location = target_sub_location
+
     elif effective_activity in apartment_only_activities and current_location == "campus":
+        current_sub = updated_sub_location or "department"
+        # Jika minta pulang via transit_ccws_ojol dari departemen, jalan kaki 1.5 km ke CCWS dulu
+        if requested_route == "transit_ccws_ojol" and current_sub == "department":
+            apply_ccws_department_walk(
+                biometrics_state, mobility_config, current_climate, is_raining, step_events
+            )
+            current_sub = "ccws"
+
         trip_result = execute_commute_trip(
             random_generator=random_generator,
             finance_manager=finance_manager,
@@ -322,12 +362,14 @@ def resolve_mobility_phase(
                 trip_result, biometrics_state, step_events
             )
             mobility_reward_penalty += float(trip_result["reward_penalty"])
+            updated_sub_location = None
         else:
             effective_activity = "wait_at_department"
+            updated_sub_location = current_sub
             step_events["return_cancelled_insufficient_funds"] = True
 
     step_events["executed_route"] = executed_route
-    return updated_location, effective_activity, mobility_reward_penalty
+    return updated_location, updated_sub_location, effective_activity, mobility_reward_penalty
 
 
 def _apply_trip_effects(

@@ -66,26 +66,26 @@ pantry_and_cooking:
     meal_prep_batch_size: 5             # Maksimal 5 porsi per sesi prep (mendukung batch parsial >= 2)
     meal_prep_min_batch_size: 2
     meal_prep_shelf_life_steps: 20      # 4 hari di kulkas (5 step/hari)
-    meal_prep_energy_cost: 24.0         # Masak batch di kompor + rice cooker
-    meal_prep_min_energy: 40.0
-    meal_prep_min_mood: 40.0
-    cook_fresh_energy_cost: 14.0        # Masak 1 porsi di kompor + rice cooker (net energi positif)
-    cook_fresh_min_energy: 30.0
-    cook_fresh_min_mood: 35.0
+    meal_prep_energy_cost: 30.0         # Dikembalikan ke pola awal user
+    meal_prep_min_energy: 48.0
+    meal_prep_min_mood: 55.0
+    cook_fresh_energy_cost: 22.0
+    cook_fresh_min_energy: 45.0
+    cook_fresh_min_mood: 50.0
     # Masak pada step pagi_awal (06:00-09:30) lebih menguras tenaga
-    morning_cook_fresh_extra_energy_cost: 10.0   # Total 24 energi di pagi hari
-    morning_cook_fresh_min_energy: 42.0
-    morning_meal_prep_extra_energy_cost: 10.0    # Total 34 energi di pagi hari
-    morning_meal_prep_min_energy: 50.0
+    morning_cook_fresh_extra_energy_cost: 18.0   # Total 40 energi di pagi hari
+    morning_cook_fresh_min_energy: 58.0
+    morning_meal_prep_extra_energy_cost: 16.0    # Total 46 energi di pagi hari
+    morning_meal_prep_min_energy: 62.0
     # Reheat di kompor/teflon (tanpa microwave)
-    reheat_prep_energy_cost: 7.0
-    reheat_prep_min_energy: 20.0
-    reheat_prep_min_mood: 25.0
+    reheat_prep_energy_cost: 10.0
+    reheat_prep_min_energy: 30.0
+    reheat_prep_min_mood: 45.0
     # Sistem bawa bekal ringan saat berangkat ke kampus (tidak menyita slot makan)
     max_packed_lunch_portions: 2
-    pack_bekal_energy_cost: 2.0
-    pack_bekal_min_energy: 15.0
-    pack_bekal_min_mood: 20.0
+    pack_bekal_energy_cost: 5.0
+    pack_bekal_min_energy: 20.0
+    pack_bekal_min_mood: 30.0
     eat_bekal_energy_cost: 2.0
   boredom_mechanics:
     sensitivity: 0.85
@@ -161,23 +161,30 @@ biometrics_and_psychology:
 mobility_and_surabaya_climate:
   heat_sensitivity: 0.95                # Mengalikan beban energi & mood jalan kaki saat midday Surabaya
   rain_ojol_surge_multiplier: 1.25      # Kenaikan tarif ojol saat hujan ringan/deras
-  rain_walk_extra_energy_cost: 10.0     # Beban tambahan jalan 1.5 km saat hujan
-  rain_walk_extra_mood_delta: -8.0
+  # Satu config tunggal untuk beban jalan kaki 1.5 km (CCWS <-> Departemen Informatika),
+  # dipakai bersama oleh rute transit_ccws_ojol dan perpindahan CCWS <-> attend_class di kampus.
+  ccws_department_walk_1_5km:
+    energy_cost_cool: 5.0
+    energy_cost_midday: 15.0
+    mood_delta_cool: -2.0
+    mood_delta_midday: -12.0
+    extra_energy_cost_rain: 10.0
+    extra_mood_delta_rain: -8.0
   routes:
-    direct_ojol:                        # Apartemen <-> Departemen Informatika
+    direct_ojol:                        # Apartemen <-> Departemen Informatika (naik ojol penuh)
       cost_normal_idr: [11000, 13000]
       cost_peak_idr: [14000, 17000]
       energy_cost: 3.0
       mood_delta_cool: 0.0
       mood_delta_midday: -2.0
       mood_delta_rain: -3.0
-    transit_ccws_ojol:                  # Apartemen <-> CCWS + 1.5 km jalan kaki
+    transit_ccws_ojol:                  # Apartemen <-> CCWS (naik ojol) + jalan kaki 1.5 km jika ke/dari Departemen
       cost_normal_idr: [7000, 8500]
       cost_peak_idr: [8500, 10000]
-      energy_cost_cool: 8.0
-      energy_cost_midday: 18.0
-      mood_delta_cool: -2.0
-      mood_delta_midday: -14.0
+      energy_cost: 3.0                  # Bagian naik ojol (Apartemen <-> CCWS); jalan 1.5 km pakai ccws_department_walk_1_5km
+      mood_delta_cool: 0.0
+      mood_delta_midday: -2.0
+      mood_delta_rain: -3.0
       minimarket_base_temptation_prob: 0.08
   campus_hub_rules:
     ccws_stay:
