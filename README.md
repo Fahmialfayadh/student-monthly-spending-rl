@@ -1,95 +1,50 @@
-# Student Life RL (30 days, 5 steps/day)
+# Student Survival Spatial-Graph RL Framework
 
-`StudentLifeEnv` + `MaskablePPO` agent managing one monthly budget (Rp 1,465,000 operational),
-biometrics, cooking/meal-prep, transport, and class attendance over 150 steps.
+A configurable Reinforcement Learning (`MaskablePPO` + Behavior Cloning) environment and FastAPI backend for simulating student monthly budgeting, spatial commuting decisions, pantry/cooking management, biometrics/stress dynamics, and academic schedules.
 
-## How to run
+## Architecture Overview
 
-Use the existing environment (do not install new packages):
+Every location, route, activity, external food option, and transport pricing rule is defined in a validated `WorldConfig` (`schema_version: "2.0"`) rather than hardcoded string checks:
+
+- **Spatial Graph & Dijkstra Routing (`src/env/world_graph.py`)**:
+  Locations (`LocationNodeConfig`) define capabilities (`can_sleep`, `has_kitchen`, `has_grocery`, `is_class_venue`, `can_study`, `closes_at_night`), ambient effects (`ambient_mood_delta`, `ambient_stress_delta`, `craving_gain_per_step`), `study_profile`, leisure parameters, and `ui_position`. `WorldGraph` computes optimal paths for `route` preferences `"fastest"` and `"cheapest"`.
+- **Distance & Transport Pricing (`src/env/pricing.py`)**:
+  Edges carry `distance_km` (driving walk fatigue/mood physics via `walk_physics`) and support 4 pricing models:
+  - `free` (e.g. walking, such as the `1.5 km` transit walk)
+  - `manual_range` (fixed A→B public transit or user-specified min/max fare range)
+  - `per_km_custom` (custom base fare + per-km rate + app fee)
+  - `ride_hailing_zone` (GoRide Zona I / II / III & GoCar tariff presets with editable overrides and rush/rain surge)
+- **First-Class `cafe` Node & Handler-Driven Actions (`src/env/actions.py`, `src/env/biometrics.py`, `src/env/lifeenv.py`)**:
+  Locations such as `cafe` are real graph nodes connected by real edges, supporting study profiles, craving relief, buff durations, mood/stress effects, and curfew rules.
+- **RL Training & Evaluation (`src/agents/`)**:
+  `StudentPPOAgent`, `BehaviorCloningPretrainer`, `StudentEvaluator`, and `ExperimentTrainer` read observations, action spaces, and activity handlers dynamically so training works on any valid graph config.
+- **FastAPI Backend (`src/api/app.py`)**:
+  Exposes JSON Schema generation, preset listing, graph validation, route/fare previewing, and interactive step-by-step sandbox sessions for UI graph builders.
+
+## Quickstart
+
+### 1. Run FastAPI Server
 
 ```bash
-/cache/ml/.venv/bin/python -m jupyter nbconvert --to notebook --execute main.ipynb --inplace
+PYTHONPATH=. /cache/ml/.venv/bin/uvicorn src.api.app:app --reload --port 8000
 ```
 
-Full training writes artifacts to `runs/` (git-ignored) and appends to `runs/experiments_summary.csv`.
-Temporary check scripts live in `scripts/tmp/` (git-ignored) and must be deleted after use.
+Key endpoints:
+- `GET /health` — health check
+- `GET /schema` — full `WorldConfig` JSON Schema + GoRide/GoCar zone presets & handler enums
+- `GET /presets` & `GET /presets/{name}` — list or load YAML presets (`surabaya_its`, `minimal_dorm`)
+- `POST /config/validate` — validate custom graph/config JSON and inspect resulting observation/action dimensions
+- `POST /graph/preview-route` — preview `"fastest"` / `"cheapest"` Dijkstra path, `distance_km`, IDR fare range, and energy/mood cost
+- `POST /sim/sessions`, `POST /sim/sessions/{id}/step`, `DELETE /sim/sessions/{id}` — interactive environment sandbox
 
-## Reward design (2026-11-26)
+### 2. Run Tests & Verification
 
-The terminal objective is unchanged: `+100` for surviving 30 days plus `+10` per Rp 100,000 left.
-Guidance is added without dictating behavior:
+```bash
+PYTHONPATH=. /cache/ml/.venv/bin/pytest -v tests/test_framework.py
+PYTHONPATH=. /cache/ml/.venv/bin/python scripts/tmp/quick_check.py
+```
 
-- `min_hunger_to_eat: 20.0` blocks direct meals while full in action masks and execution;
-  `meal_prep` and `pack_bekal` remain available.
-- Three goal-progress observation features: `days_remaining`, `burn_rate_per_day_idr`,
-  `budget_runway_days` (observation dim 35 -> 38).
-- Potential-based shaping `gamma * Phi(s') - Phi(s)` on balance coverage, `enabled: true`
-  under `rewards.budget_potential_shaping`. `gamma` must match `TRAIN_CONFIG.discount_factor_gamma`
-  in `main.ipynb` (both `0.995`). Terminal potential is zero, so the shaping does not change the
-  optimal policy; it only improves per-step credit assignment.
-- No per-rupiah spending tax: the agent is free to find its own allocation of the budget.
+### 3. Run RL Training
 
-## Meal-prep energy gates (2026-11-26)
-
-`meal_prep_energy_cost` 38 -> 30, `meal_prep_min_energy` 55 -> 48,
-`morning_meal_prep_extra_energy_cost` 22 -> 16 (morning total 60 -> 46), and
-`morning_meal_prep_min_energy` 72 -> 62. Batch size, mood gate, cook_fresh costs, rewards,
-and task goals are unchanged. Rationale: mid-day energy after class/commute is 50-70, so the old
-gate made prep unreachable in exactly the window where it was needed. Prep still costs more than a
-single fresh cook (30 vs 22) and more in the morning (46 vs 40).
-
-## Training schedule (3M steps)
-
-`TRAINING_SCHEDULE` in `main.ipynb`: 3,000,000 timesteps, evaluation every 100,000 steps,
-`survival_phase_timesteps=500_000`. Checkpoint selection is lexicographic: maximize
-`completion_rate` first; while incomplete, maximize `mean_days_survived`; once 100% complete,
-maximize `mean_final_balance_idr`, then attendance, then mean reward. This makes `best_model.zip`
-keep the surviving model and only replace it with a richer one. If completion is still below 100%
-at 500k, training continues trying; 500k is only a milestone, not a phase switch. The phase label
-stays `survive` until an evaluation actually reaches 100% completion, and the checkpoint rule keeps
-survival dominant. The learning rate stays at 3e-4 until the first evaluation with 100% completion,
-then decays to 3e-5 over the remaining steps (SB3's own progress resets at each `learn()` chunk).
-`eval_history.csv` carries `training_phase`; `train_config.json` and `final_eval_summary.json`
-record the 500k target and best checkpoint score.
-
-A 3M run with immediate LR decay (run `20261126_115417`) diverged into a cafe-heavy local optimum
-(~15 days, Rp 450k/spending on cafe) while identical-config runs with constant LR reached ~25 days
-by 100k steps. The LR is therefore held constant until survival is achieved.
-
-## Resume and offline evaluation
-
-`StudentPPOAgent.train_with_logging(..., resume_from_run=RUN_DIR, resume_checkpoint="best")`
-continues an interrupted run in the same directory. It restores model/optimizer weights,
-VecNormalize statistics and training flags, `eval_history.csv`, best checkpoint score/timestep,
-survival/LR-decay state, and rebuilds the custom LR schedule. The config SHA must match the
-original run; use `RUN_DIR / "env_config_snapshot.yaml"` as `yaml_path` when resuming. The master
-log row is replaced instead of duplicated.
-
-Notebook cell `cell-recover-eval` is standalone: it does not depend on variables from the training
-cell. It finds the latest run (or uses `RUN_DIR`), evaluates `best_model.zip` with seed 11000,
-writes `manual_eval_summary.json` + CSVs, and defines `run_dir`, `eval_history_df`, `final_summary`,
-`final_episodes_df`, and `best_episode_trace_df` for the cells below. Commented lines in that cell
-show the resume call.
-
-## Logged metrics
-
-`days_survived = ceil(episode_steps / steps_per_day)` is the day reached when an episode ends
-(30 for completed episodes). It is written per episode in `final_eval_episodes.csv`, aggregated
-as `mean_days_survived` in `eval_history.csv` / `final_eval_summary.json`, and printed as `Hari`
-in the training log. CPU training is not bit-reproducible across runs, so probe numbers vary.
-
-## Quick-check log
-
-Date: 2026-11-26 | Python: `/cache/ml/.venv/bin/python` | seed 42/7 as noted
-
-| Check | Result |
-| --- | --- |
-| Action gates | eat blocked at hunger=0, allowed at hunger=50; prep/pack gated by stock |
-| Observation | 38 features, three new finite goal-progress values |
-| Potential shaping | finite per-step component (e.g. -0.05 at step 0) |
-| Heuristic baseline (3 seeds) | 100% completion, 30.0/30 days, Rp 193,226 left, ~5.7 home-cooked meals/episode |
-| MaskablePPO smoke (1,280 steps, seed 7) | runs without error; 20.5/30 days, finite reward/return |
-| RL probe (25k steps, seed 42, 5 eval episodes) | 24.8/30 days (122.2/150 steps), 0% completion, Rp 30,991 left, 0 cooking, 41.8 warung meals |
-
-The 25k-step probe is **not** conclusive: it shows better survival than the previous 83.6-step
-run (day ~17) but no cooking yet. Run the full 3M-step schedule in `main.ipynb` before judging behavior.
+- Presets live in `configs/presets/surabaya_its.yaml` (mirrored to `env_config.yaml`) and `configs/presets/minimal_dorm.yaml`.
+- Execute `main.ipynb` or use `StudentPPOAgent` directly with any preset or custom YAML path.
