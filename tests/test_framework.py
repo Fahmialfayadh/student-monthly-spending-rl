@@ -458,3 +458,121 @@ def test_user_walk_preference_and_distance_limit() -> None:
     graph_avoid = WorldGraph(WorldConfig.model_validate(avoid_cfg))
     p_avoid_cheap = graph_avoid.find_best_path("dorm", "campus_library", preference="cheapest")
     assert p_avoid_cheap is not None and [e.id for e in p_avoid_cheap.edges] == ["bus_dorm_campus"]
+
+
+def test_typed_schema_training_api_runs_and_autostep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+    import src.api.routes.runs as runs_routes
+    import src.api.routes.simulation as sim_routes
+    import src.api.routes.training as train_routes
+
+    monkeypatch.setattr(runs_routes, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(sim_routes, "ROOT_DIR", tmp_path)
+    monkeypatch.setattr(train_routes, "ROOT_DIR", tmp_path)
+
+    client = TestClient(app)
+
+    # 1. Verify /schema exposes training_json_schema and typed sub-models
+    schema_resp = client.get("/schema").json()
+    assert "training_json_schema" in schema_resp
+    assert "default_training_profile" in schema_resp
+    assert "walk_preferences" in schema_resp
+    world_defs = schema_resp["json_schema"]["$defs"]
+    for typed_submodel in (
+        "StepDynamicsConfig",
+        "CookingCostsAndGatesConfig",
+        "WellbeingWeightsConfig",
+        "BudgetPotentialShapingConfig",
+        "WeeklyScheduleConfig",
+    ):
+        assert typed_submodel in world_defs
+
+    # Missing 1 of 4 standard pantry ingredients must fail schema validation (422)
+    bad_pantry = client.get("/presets/minimal_dorm").json()["config"]
+    del bad_pantry["pantry_and_cooking"]["ingredients"]["tempe"]
+    assert client.post("/config/validate", json=bad_pantry).status_code == 422
+
+    # 2. Training validation: matching gamma passes, mismatched gamma fails 422
+    r_ok = client.post(
+        "/training/validate",
+        json={"preset_name": "minimal_dorm", "training_profile": {}},
+    )
+    assert r_ok.status_code == 200
+    assert r_ok.json()["valid"] is True
+
+    r_bad_gamma = client.post(
+        "/training/validate",
+        json={
+            "preset_name": "minimal_dorm",
+            "training_profile": {"ppo": {"discount_factor_gamma": 0.90}},
+        },
+    )
+    assert r_bad_gamma.status_code == 422
+
+    # 3. Run mini background training job, poll until done, inspect /runs, and auto-step with model
+    mini_profile = {
+        "experiment_name": "api_smoke",
+        "runs_root_dir": "runs",
+        "ppo": {
+            "num_environments": 2,
+            "features_dim": 32,
+            "hidden_dim": 32,
+            "policy_hidden_layers": [32],
+            "value_hidden_layers": [32],
+            "rollout_steps_per_env": 64,
+            "batch_size": 32,
+            "num_epochs": 2,
+            "discount_factor_gamma": 0.995,
+            "device": "cpu",
+        },
+        "bc": {"enabled": True, "num_episodes": 2, "epochs": 2, "batch_size": 64},
+        "schedule": {
+            "total_timesteps": 128,
+            "eval_interval_steps": 128,
+            "eval_episodes": 1,
+            "final_eval_episodes": 1,
+            "survival_phase_timesteps": 64,
+        },
+    }
+    r_start = client.post(
+        "/training/start",
+        json={"preset_name": "minimal_dorm", "training_profile": mini_profile},
+    )
+    assert r_start.status_code == 200
+    job_id = r_start.json()["job_id"]
+
+    job_data = None
+    for _ in range(60):
+        job_data = client.get(f"/training/jobs/{job_id}").json()
+        if job_data["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.25)
+    assert job_data is not None and job_data["status"] == "completed", job_data
+
+    runs_list = client.get("/runs").json()["runs"]
+    assert len(runs_list) == 1
+    run_id = runs_list[0]["run_id"]
+    run_detail = client.get(f"/runs/{run_id}").json()
+    assert run_detail["final_summary"] is not None
+    run_trace = client.get(f"/runs/{run_id}/trace").json()
+    assert len(run_trace["steps"]) > 0
+
+    # 4. Simulation session GET, reset, heuristic auto-step, and trained model auto-step
+    sid = client.post("/sim/sessions", json={"preset_name": "minimal_dorm", "seed": 7}).json()[
+        "session_id"
+    ]
+    assert client.get(f"/sim/sessions/{sid}").status_code == 200
+    r_h = client.post(f"/sim/sessions/{sid}/auto-step", json={"mode": "heuristic"})
+    assert r_h.status_code == 200 and len(r_h.json()["action_taken"]) == 6
+
+    r_m = client.post(
+        f"/sim/sessions/{sid}/auto-step",
+        json={"mode": "model", "run_id": run_id, "checkpoint": "best"},
+    )
+    assert r_m.status_code == 200 and len(r_m.json()["action_taken"]) == 6
+
+    r_rst = client.post(f"/sim/sessions/{sid}/reset", json={"seed": 99})
+    assert r_rst.status_code == 200 and r_rst.json()["graph_state"]["current_step"] == 0
+    client.delete(f"/sim/sessions/{sid}")

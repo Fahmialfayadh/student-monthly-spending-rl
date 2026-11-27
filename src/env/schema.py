@@ -31,36 +31,167 @@ class EnvironmentConfig(BaseModel):
         return self
 
 
+class FinanceAlertsConfig(BaseModel):
+    low_balance_threshold: float = Field(default=250000.0, ge=0.0)
+
+
+class LateMonthImpulsivityConfig(BaseModel):
+    start_day: int = Field(default=22, ge=1)
+    weight: float = Field(default=0.50, ge=0.0, le=1.0)
+
+
 class FinanceConfig(BaseModel):
     monthly_budget: float = Field(gt=0.0)
     fixed_expenses: dict[str, float] = Field(default_factory=dict)
-    alerts: dict[str, float] = Field(default_factory=lambda: {"low_balance_threshold": 250000.0})
-    late_month_impulsivity: dict[str, float] = Field(
-        default_factory=lambda: {"start_day": 22, "weight": 0.50}
+    alerts: FinanceAlertsConfig = Field(default_factory=FinanceAlertsConfig)
+    late_month_impulsivity: LateMonthImpulsivityConfig = Field(
+        default_factory=LateMonthImpulsivityConfig
     )
+
+
+class NutritionPerUnitConfig(BaseModel):
+    hunger: float
+    energy: float
+    mood: float
 
 
 class IngredientConfig(BaseModel):
     pack_price_idr: float = Field(gt=0.0)
     units_per_pack: int = Field(ge=1)
     shelf_life_steps: int = Field(ge=1)
-    nutrition_per_unit: dict[str, float]
+    nutrition_per_unit: NutritionPerUnitConfig
+
+
+class InitialPantryConfig(BaseModel):
+    rice: int = Field(default=0, ge=0)
+    egg: int = Field(default=0, ge=0)
+    chicken: int = Field(default=0, ge=0)
+    tempe: int = Field(default=0, ge=0)
+    meal_prep: int = Field(default=0, ge=0)
+
+
+class MealCompositionRulesConfig(BaseModel):
+    plain_rice_only_mood_penalty: float = -5.0
+    multi_lauk_mood_bonus: float = 2.0
+    max_meal_hunger_reduction: float = Field(default=75.0, ge=0.0)
+    max_meal_energy_gain: float = Field(default=28.0, ge=0.0)
+    reheat_mood_delta: float = -1.0
+
+
+class GroceryShoppingConfig(BaseModel):
+    energy_cost: float = Field(default=15.0, ge=0.0)
+    mood_delta: float = -4.0
+    transport_cost_idr: float = Field(default=0.0, ge=0.0)
+
+
+class CookingCostsAndGatesConfig(BaseModel):
+    meal_prep_batch_size: int = Field(default=5, ge=2)
+    meal_prep_min_batch_size: int = Field(default=2, ge=1)
+    meal_prep_shelf_life_steps: int = Field(default=20, ge=1)
+    meal_prep_energy_cost: float = Field(default=30.0, ge=0.0)
+    meal_prep_min_energy: float = Field(default=48.0, ge=0.0, le=100.0)
+    meal_prep_min_mood: float = Field(default=55.0, ge=0.0, le=100.0)
+    cook_fresh_energy_cost: float = Field(default=22.0, ge=0.0)
+    cook_fresh_min_energy: float = Field(default=45.0, ge=0.0, le=100.0)
+    cook_fresh_min_mood: float = Field(default=50.0, ge=0.0, le=100.0)
+    morning_cook_fresh_extra_energy_cost: float = Field(default=18.0, ge=0.0)
+    morning_cook_fresh_min_energy: float = Field(default=58.0, ge=0.0, le=100.0)
+    morning_meal_prep_extra_energy_cost: float = Field(default=16.0, ge=0.0)
+    morning_meal_prep_min_energy: float = Field(default=62.0, ge=0.0, le=100.0)
+    reheat_prep_energy_cost: float = Field(default=10.0, ge=0.0)
+    reheat_prep_min_energy: float = Field(default=30.0, ge=0.0, le=100.0)
+    reheat_prep_min_mood: float = Field(default=45.0, ge=0.0, le=100.0)
+    max_packed_lunch_portions: int = Field(default=2, ge=1)
+    pack_bekal_energy_cost: float = Field(default=5.0, ge=0.0)
+    pack_bekal_min_energy: float = Field(default=20.0, ge=0.0, le=100.0)
+    pack_bekal_min_mood: float = Field(default=30.0, ge=0.0, le=100.0)
+    eat_bekal_energy_cost: float = Field(default=2.0, ge=0.0)
+
+
+class BoredomMechanicsConfig(BaseModel):
+    sensitivity: float = Field(default=0.85, ge=0.0)
+    recent_meal_window: int = Field(default=4, ge=1)
+    recent_repeat_mood_penalty: list[float] = Field(
+        default_factory=lambda: [0.0, -2.5, -9.0, -18.0], min_length=1
+    )
+    consecutive_extra_mood_penalty: float = -5.5
+    apply_sensitivity_to_penalty: bool = True
 
 
 class PantryAndCookingConfig(BaseModel):
-    initial_pantry: dict[str, int] = Field(default_factory=dict)
+    initial_pantry: InitialPantryConfig = Field(default_factory=InitialPantryConfig)
     ingredients: dict[str, IngredientConfig]
-    meal_composition_rules: dict[str, float]
-    grocery_shopping: dict[str, float]
-    cooking_costs_and_gates: dict[str, float]
-    boredom_mechanics: dict[str, Any]
+    meal_composition_rules: MealCompositionRulesConfig = Field(
+        default_factory=MealCompositionRulesConfig
+    )
+    grocery_shopping: GroceryShoppingConfig = Field(default_factory=GroceryShoppingConfig)
+    cooking_costs_and_gates: CookingCostsAndGatesConfig = Field(
+        default_factory=CookingCostsAndGatesConfig
+    )
+    boredom_mechanics: BoredomMechanicsConfig = Field(default_factory=BoredomMechanicsConfig)
+
+    @model_validator(mode="after")
+    def _validate_standard_ingredients(self) -> "PantryAndCookingConfig":
+        required = {"rice", "egg", "chicken", "tempe"}
+        missing = sorted(required - set(self.ingredients.keys()))
+        if missing:
+            raise ValueError(
+                f"pantry_and_cooking.ingredients wajib memiliki 4 slot bahan standar: {missing} tidak ditemukan."
+            )
+        return self
+
+
+class BiometricsInitialStateConfig(BaseModel):
+    energy: float = Field(default=85.0, ge=0.0, le=100.0)
+    hunger: float = Field(default=20.0, ge=0.0, le=100.0)
+    mood: float = Field(default=75.0, ge=0.0, le=100.0)
+    academic_stress: float = Field(default=25.0, ge=0.0, le=100.0)
+    cafe_craving: float = Field(default=20.0, ge=0.0, le=100.0)
+
+
+class StepDynamicsConfig(BaseModel):
+    starvation_threshold: float = Field(default=75.0, ge=0.0, le=100.0)
+    starvation_energy_penalty_per_step: float = -10.0
+    starvation_mood_penalty_per_step: float = -8.0
+    overnight_hunger_gain: float = Field(default=8.0, ge=0.0)
+    skip_meal_hunger_threshold: float = Field(default=48.0, ge=0.0, le=100.0)
+    skip_meal_tolerance: float = Field(default=0.80, ge=0.0)
+    skip_meal_mood_penalty: float = -5.0
+    skip_meal_energy_penalty: float = -10.0
+    sleep_normal_energy_gain: float = Field(default=50.0, ge=0.0)
+    sleep_normal_energy_cap: float = Field(default=95.0, ge=0.0, le=100.0)
+    sleep_normal_mood_gain: float = 5.0
+    night_unwind_energy_gain: float = 5.0
+    night_unwind_mood_gain: float = 1.5
+    sleep_cramming_energy_gain: float = Field(default=25.0, ge=0.0)
+    sleep_cramming_mood_delta: float = -8.0
+    rest_step_energy_gain: float = 18.0
+    rest_step_mood_gain: float = 3.0
+    rest_step_high_craving_mood_delta: float = -2.0
+    min_hunger_to_eat: float = Field(default=20.0, ge=0.0, le=100.0)
+
+
+class CafeSessionCravingConfig(BaseModel):
+    craving_reset_to: float = Field(default=0.0, ge=0.0, le=100.0)
+
+
+class CravingAndCafeConfig(BaseModel):
+    stress_bonus_threshold: float = Field(default=55.0, ge=0.0, le=100.0)
+    stress_or_heat_craving_bonus: float = Field(default=3.0, ge=0.0)
+    distraction_threshold: float = Field(default=45.0, ge=0.0, le=100.0)
+    high_distraction_threshold: float = Field(default=75.0, ge=0.0, le=100.0)
+    distraction_mood_penalty_per_step: float = -3.5
+    high_distraction_mood_penalty_per_step: float = -7.0
+    distraction_room_study_efficiency: float = Field(default=0.55, ge=0.0, le=1.0)
+    high_distraction_room_study_efficiency: float = Field(default=0.30, ge=0.0, le=1.0)
+    cafe_session: CafeSessionCravingConfig = Field(default_factory=CafeSessionCravingConfig)
 
 
 class BiometricsAndPsychologyConfig(BaseModel):
     state_bounds: list[float] = Field(default_factory=lambda: [0.0, 100.0], min_length=2, max_length=2)
-    initial_state: dict[str, float]
-    step_dynamics: dict[str, float]
-    craving_and_cafe: dict[str, Any]
+    initial_state: BiometricsInitialStateConfig = Field(default_factory=BiometricsInitialStateConfig)
+    step_dynamics: StepDynamicsConfig = Field(default_factory=StepDynamicsConfig)
+    craving_and_cafe: CravingAndCafeConfig = Field(default_factory=CravingAndCafeConfig)
 
 
 class WalkPhysicsConfig(BaseModel):
@@ -138,6 +269,11 @@ class NodeStudyProfile(BaseModel):
     first_visit_mood_gain: float = 0.0
 
 
+class UiPositionConfig(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+
+
 class LocationNodeConfig(BaseModel):
     id: str
     label: str
@@ -167,7 +303,7 @@ class LocationNodeConfig(BaseModel):
     temptation_prob: float = Field(default=0.0, ge=0.0, le=1.0)
     impulse_item_id: str | None = None
     food_options: list[str] = Field(default_factory=list)
-    ui_position: dict[str, float] = Field(default_factory=lambda: {"x": 0.0, "y": 0.0})
+    ui_position: UiPositionConfig = Field(default_factory=UiPositionConfig)
 
 
 class EdgeRouteConfig(BaseModel):
@@ -247,8 +383,18 @@ class MobilityAndClimateConfig(BaseModel):
     impulse_items: dict[str, ImpulseItemConfig] = Field(default_factory=dict)
 
 
+class WeeklyScheduleConfig(BaseModel):
+    monday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    tuesday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    wednesday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    thursday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    friday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    saturday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+    sunday: list[int] = Field(default_factory=lambda: [0, 0, 0, 0, 0])
+
+
 class AcademicsConfig(BaseModel):
-    weekly_schedule: dict[str, list[int]]
+    weekly_schedule: WeeklyScheduleConfig
     weekday_task_probability: float = Field(default=1.0, ge=0.0, le=1.0)
     weekday_base_task_stress_gain: float = 14.0
     per_class_daily_stress_gain: float = 4.0
@@ -275,13 +421,47 @@ class TerminationConfig(BaseModel):
     fatal_termination_penalty: float = -800.0
 
 
+class WellbeingWeightsConfig(BaseModel):
+    energy_weight: float = 0.015
+    mood_weight: float = 0.025
+    hunger_penalty_weight: float = -0.020
+    stress_penalty_weight: float = -0.030
+    excess_craving_penalty_weight: float = -0.035
+
+
+class CriticalStatePenaltiesConfig(BaseModel):
+    starvation_per_step: float = -6.0
+    burnout_mood_per_step: float = -10.0
+    burnout_stress_per_step: float = -10.0
+    food_spoilage_per_unit: float = -0.35
+    emergency_return_penalty: float = -10.0
+
+
+class TerminalEpisodeCompletionConfig(BaseModel):
+    survived_30_days_bonus: float = 120.0
+    remaining_balance_reward_per_100k: float = 70.0
+    low_attendance_terminal_penalty: float = -100.0
+
+
+class BudgetPotentialShapingConfig(BaseModel):
+    enabled: bool = True
+    potential_scale: float = Field(default=220.0, ge=0.0)
+    gamma: float = Field(default=0.995, gt=0.0, le=1.0)
+
+
 class RewardsConfig(BaseModel):
     step_survival_bonus: float = 1.0
-    wellbeing_weights: dict[str, float]
-    critical_state_penalties: dict[str, float]
+    wellbeing_weights: WellbeingWeightsConfig = Field(default_factory=WellbeingWeightsConfig)
+    critical_state_penalties: CriticalStatePenaltiesConfig = Field(
+        default_factory=CriticalStatePenaltiesConfig
+    )
     class_attendance_bonus: float = 6.0
-    terminal_episode_completion: dict[str, float]
-    budget_potential_shaping: dict[str, Any]
+    terminal_episode_completion: TerminalEpisodeCompletionConfig = Field(
+        default_factory=TerminalEpisodeCompletionConfig
+    )
+    budget_potential_shaping: BudgetPotentialShapingConfig = Field(
+        default_factory=BudgetPotentialShapingConfig
+    )
 
 
 class WorldConfig(BaseModel):

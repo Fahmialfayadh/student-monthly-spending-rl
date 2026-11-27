@@ -29,11 +29,26 @@ class SimCreateRequest(BaseModel):
     exploring_starts_pantry: bool | None = None
 
 
+class SimResetRequest(BaseModel):
+    """Payload reset episode pada sesi sandbox aktif."""
+
+    seed: int | None = None
+
+
 class SimStepRequest(BaseModel):
     """Payload satu langkah aksi (6 head MultiDiscrete) pada sesi sandbox."""
 
     action: list[int] = Field(min_length=6, max_length=6)
     validate_mask: bool = True
+
+
+class SimAutoStepRequest(BaseModel):
+    """Payload 1 langkah otomatis memakai heuristic expert atau model terlatih."""
+
+    mode: Literal["heuristic", "model"] = "heuristic"
+    run_id: str | None = None
+    checkpoint: Literal["best", "final"] = "best"
+    deterministic: bool = True
 
 
 class SaveConfigRequest(BaseModel):
@@ -53,3 +68,21 @@ class ImportYamlRequest(BaseModel):
     yaml_content: str = Field(min_length=1)
     overwrite: bool = True
     set_active_env_config: bool = False
+
+
+class TrainingValidateRequest(BaseModel):
+    """Payload validasi TrainingProfileConfig beserta cross-check terhadap WorldConfig."""
+
+    training_profile: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] | None = None
+    preset_name: str | None = "surabaya_its"
+    custom_config_name: str | None = None
+
+
+class TrainingStartRequest(BaseModel):
+    """Payload untuk menjalankan training RL (opsional BC warm-start + MaskablePPO)."""
+
+    training_profile: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] | None = None
+    preset_name: str | None = "surabaya_its"
+    custom_config_name: str | None = None
