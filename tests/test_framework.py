@@ -318,3 +318,143 @@ def test_fastapi_endpoints_and_sandbox_flow() -> None:
     r_del = client.delete(f"/sim/sessions/{sid}")
     assert r_del.status_code == 200
     assert r_del.json()["deleted"] is True
+
+
+def test_local_config_save_load_sync_and_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.api.dependencies as api_deps
+    import src.api.routes.configs as cfg_routes
+
+    custom_dir = tmp_path / "custom_configs"
+    active_cfg = tmp_path / "env_config.yaml"
+    monkeypatch.setattr(api_deps, "CUSTOM_CONFIGS_DIR", custom_dir)
+    monkeypatch.setattr(api_deps, "ACTIVE_ENV_CONFIG_PATH", active_cfg)
+    monkeypatch.setattr(cfg_routes, "CUSTOM_CONFIGS_DIR", custom_dir)
+    monkeypatch.setattr(cfg_routes, "ACTIVE_ENV_CONFIG_PATH", active_cfg)
+    monkeypatch.setattr(cfg_routes, "ROOT_DIR", tmp_path)
+
+    client = TestClient(app)
+    base_cfg = client.get("/presets/minimal_dorm").json()["config"]
+    edited = copy.deepcopy(base_cfg)
+    edited["finance"]["monthly_budget"] = 1_800_000.0
+
+    # 1. Save named local custom config + sync to active env_config.yaml
+    r_save = client.post(
+        "/configs/save",
+        json={
+            "name": "campus_experiment_v1",
+            "config": edited,
+            "set_active_env_config": True,
+        },
+    )
+    assert r_save.status_code == 200
+    save_body = r_save.json()
+    assert save_body["saved"] is True
+    assert (custom_dir / "campus_experiment_v1.yaml").exists()
+    assert active_cfg.exists()
+    sha1 = save_body["sha256"]
+
+    # 2. List & read back from local YAML
+    r_list = client.get("/configs")
+    assert r_list.status_code == 200
+    listed_scopes = {(c["scope"], c["name"]) for c in r_list.json()["configs"]}
+    assert ("custom", "campus_experiment_v1") in listed_scopes
+    assert ("active", "env_config") in listed_scopes
+
+    r_get = client.get("/configs/custom/campus_experiment_v1")
+    assert r_get.status_code == 200
+    assert r_get.json()["sha256"] == sha1
+    assert r_get.json()["config"]["finance"]["monthly_budget"] == 1_800_000.0
+
+    # 3. Optimistic sha256 check catches external file edit conflict (409)
+    edited2 = copy.deepcopy(edited)
+    edited2["finance"]["monthly_budget"] = 1_900_000.0
+    r_conflict = client.post(
+        "/configs/save",
+        json={
+            "name": "campus_experiment_v1",
+            "config": edited2,
+            "expected_sha256": "stale_hash",
+        },
+    )
+    assert r_conflict.status_code == 409
+
+    # 4. Run sandbox simulation and route preview directly from saved custom config
+    r_route = client.post(
+        "/graph/preview-route",
+        json={
+            "custom_config_name": "campus_experiment_v1",
+            "source_node_id": "dorm",
+            "target_node_id": "campus_library",
+            "preference": "cheapest",
+        },
+    )
+    assert r_route.status_code == 200
+    assert r_route.json()["edge_ids"] == ["walk_dorm_campus"]
+
+    r_sess = client.post(
+        "/sim/sessions",
+        json={"custom_config_name": "campus_experiment_v1", "seed": 5},
+    )
+    assert r_sess.status_code == 200
+    sid = r_sess.json()["session_id"]
+    client.delete(f"/sim/sessions/{sid}")
+
+    # 5. Import raw YAML text & delete cleanly
+    yaml_text = r_get.json()["yaml_text"]
+    r_imp = client.post(
+        "/configs/import-yaml",
+        json={"name": "imported_copy", "yaml_content": yaml_text},
+    )
+    assert r_imp.status_code == 200
+    assert (custom_dir / "imported_copy.yaml").exists()
+
+    assert client.delete("/configs/custom/campus_experiment_v1").status_code == 200
+    assert client.delete("/configs/custom/imported_copy").status_code == 200
+    assert not (custom_dir / "campus_experiment_v1.yaml").exists()
+
+
+def test_user_walk_preference_and_distance_limit() -> None:
+    raw = load_world_config(SURABAYA_YAML).model_dump()
+
+    # 1. User limits walking to 1.0 km -> 1.5 km walk edge is skipped; cheapest falls back to direct motorized
+    limited = copy.deepcopy(raw)
+    limited["mobility_and_climate"]["walk_physics"]["max_walk_distance_km"] = 1.0
+    graph_limited = WorldGraph(WorldConfig.model_validate(limited))
+    p_limited = graph_limited.find_best_path(
+        "apartment", "department", preference="cheapest", climate="cool", ojol_tariff="normal", is_raining=False
+    )
+    assert p_limited is not None
+    assert [e.id for e in p_limited.edges] == ["direct_ojol"]
+    assert p_limited.walk_distance_km == 0.0
+
+    # 2. User allows 2.0 km when dry, but max 0.5 km when raining -> rain blocks 1.5 km walk
+    rain_limited = copy.deepcopy(raw)
+    rain_limited["mobility_and_climate"]["walk_physics"]["max_walk_distance_km"] = 2.0
+    rain_limited["mobility_and_climate"]["walk_physics"]["max_walk_distance_rain_km"] = 0.5
+    graph_rain = WorldGraph(WorldConfig.model_validate(rain_limited))
+    p_dry = graph_rain.find_best_path(
+        "apartment", "department", preference="cheapest", is_raining=False
+    )
+    p_wet = graph_rain.find_best_path(
+        "apartment", "department", preference="cheapest", is_raining=True
+    )
+    assert p_dry is not None and [e.id for e in p_dry.edges] == [
+        "transit_ccws_ojol",
+        "walk_ccws_department_1_5km",
+    ]
+    assert p_wet is not None and [e.id for e in p_wet.edges] == ["direct_ojol"]
+
+    # 3. minimal_dorm: prefer_walk vs avoid_walk changes route even on same preference
+    dorm_raw = load_world_config(MINIMAL_YAML).model_dump()
+    prefer_cfg = copy.deepcopy(dorm_raw)
+    prefer_cfg["mobility_and_climate"]["walk_physics"]["walk_preference"] = "prefer_walk"
+    prefer_cfg["mobility_and_climate"]["walk_physics"]["prefer_walk_score_multiplier"] = 0.05
+    graph_pref = WorldGraph(WorldConfig.model_validate(prefer_cfg))
+    p_pref_fast = graph_pref.find_best_path("dorm", "campus_library", preference="fastest")
+    assert p_pref_fast is not None and [e.id for e in p_pref_fast.edges] == ["walk_dorm_campus"]
+
+    avoid_cfg = copy.deepcopy(dorm_raw)
+    avoid_cfg["mobility_and_climate"]["walk_physics"]["walk_preference"] = "avoid_walk"
+    graph_avoid = WorldGraph(WorldConfig.model_validate(avoid_cfg))
+    p_avoid_cheap = graph_avoid.find_best_path("dorm", "campus_library", preference="cheapest")
+    assert p_avoid_cheap is not None and [e.id for e in p_avoid_cheap.edges] == ["bus_dorm_campus"]

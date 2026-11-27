@@ -18,8 +18,8 @@ Every location, route, activity, external food option, and transport pricing rul
   Locations such as `cafe` are real graph nodes connected by real edges, supporting study profiles, craving relief, buff durations, mood/stress effects, and curfew rules.
 - **RL Training & Evaluation (`src/agents/`)**:
   `StudentPPOAgent`, `BehaviorCloningPretrainer`, `StudentEvaluator`, and `ExperimentTrainer` read observations, action spaces, and activity handlers dynamically so training works on any valid graph config.
-- **FastAPI Backend (`src/api/app.py`)**:
-  Exposes JSON Schema generation, preset listing, graph validation, route/fare previewing, and interactive step-by-step sandbox sessions for UI graph builders.
+- **FastAPI Backend (`src/api/app.py`, `src/api/routes/`)**:
+  Modular `APIRouter` endpoints (`system`, `configs`, `graph`, `simulation`) exposing JSON Schema generation, preset listing, graph validation, route/fare previewing, and interactive step-by-step sandbox sessions for UI graph builders.
 
 ## Quickstart
 
@@ -32,7 +32,9 @@ PYTHONPATH=. /cache/ml/.venv/bin/uvicorn src.api.app:app --reload --port 8000
 Key endpoints:
 - `GET /health` — health check
 - `GET /schema` — full `WorldConfig` JSON Schema + GoRide/GoCar zone presets & handler enums
-- `GET /presets` & `GET /presets/{name}` — list or load YAML presets (`surabaya_its`, `minimal_dorm`)
+- `GET /presets` & `GET /presets/{name}` — list or load built-in YAML presets (`surabaya_its`, `minimal_dorm`)
+- `GET /configs` & `GET /configs/{scope}/{name}` — list or inspect local YAML files (`active`, `preset`, `custom`) with `sha256` & `yaml_text`
+- `POST /configs/save` & `POST /configs/import-yaml` & `DELETE /configs/custom/{name}` — validate and save named custom configs to `configs/custom/<name>.yaml` (with optional `expected_sha256` conflict check and optional sync to root `env_config.yaml`)
 - `POST /config/validate` — validate custom graph/config JSON and inspect resulting observation/action dimensions
 - `POST /graph/preview-route` — preview `"fastest"` / `"cheapest"` Dijkstra path, `distance_km`, IDR fare range, and energy/mood cost
 - `POST /sim/sessions`, `POST /sim/sessions/{id}/step`, `DELETE /sim/sessions/{id}` — interactive environment sandbox

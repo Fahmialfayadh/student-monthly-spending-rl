@@ -239,3 +239,7 @@ runs/
 
 # Temporary AI helper scripts / debug output
 scripts/tmp/
+
+# User-created local configs saved from UI/API
+configs/custom/*.yaml
+configs/custom/*.yml
