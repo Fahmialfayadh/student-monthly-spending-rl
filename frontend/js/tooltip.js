@@ -1,4 +1,4 @@
-/* Viewport-clamped floating tooltip controller (active on hover/focus with gentle delay) */
+/* Viewport-clamped floating tooltip controller (hover-only, gentle 360ms delay so it never intrudes on typing) */
 
 let tooltipEl = null;
 let showTimer = null;
@@ -39,7 +39,7 @@ function positionTooltip(target) {
   el.style.top = `${Math.round(top)}px`;
 }
 
-function hideTooltip() {
+export function hideTooltip() {
   clearTimeout(showTimer);
   activeTarget = null;
   if (tooltipEl) tooltipEl.classList.remove('is-visible');
@@ -57,7 +57,7 @@ export function initGlobalTooltips() {
     activeTarget = target;
     showTimer = setTimeout(() => {
       if (activeTarget === target) positionTooltip(target);
-    }, 170);
+    }, 360);
   });
 
   document.addEventListener('mouseout', (ev) => {
@@ -66,13 +66,8 @@ export function initGlobalTooltips() {
     if (related !== activeTarget) hideTooltip();
   });
 
-  document.addEventListener('focusin', (ev) => {
-    const target = ev.target?.closest?.('[data-tooltip]');
-    if (!target) return;
-    activeTarget = target;
-    positionTooltip(target);
-  });
-
-  document.addEventListener('focusout', hideTooltip);
+  // Hide immediately on click or input focus so tooltip never blocks typing
+  document.addEventListener('pointerdown', hideTooltip);
+  document.addEventListener('focusin', hideTooltip);
   window.addEventListener('scroll', hideTooltip, true);
 }

@@ -1,85 +1,113 @@
 <section id="panel-simulation" class="tab-panel" role="tabpanel" hidden>
-  <div class="split-layout">
-    <div class="stack-col">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <h2>Live Spatial Sandbox</h2>
-            <p class="panel-sub" id="sim-step-subtitle">Step 0 · Reset or run steps manually / via trained policy</p>
-          </div>
-          <div style="display: flex; align-items: center; gap: 6px;">
-            <select id="sim-policy-mode" class="control-select" style="width: 145px;">
-              <option value="heuristic">Heuristic Expert</option>
-              <option value="model">Trained Run Model</option>
-            </select>
-            <select id="sim-run-select" class="control-select mono" style="width: 170px;" hidden></select>
-            <button id="btn-sim-autostep" class="btn btn-sm btn-primary" type="button">Auto Step</button>
-            <button id="btn-sim-play" class="btn btn-sm" type="button">Play</button>
-            <button id="btn-sim-reset" class="btn btn-sm" type="button">Reset</button>
-          </div>
-        </div>
-        <div class="graph-stage" style="height: 410px;">
-          <svg id="sim-graph-svg" class="graph-svg" viewBox="0 0 820 410"></svg>
-          <div class="graph-legend">
-            <span class="legend-item"><span class="legend-dot" style="background: var(--graph-agent);"></span>Agent Position</span>
-            <span class="legend-item"><span class="legend-dot" style="background: var(--graph-route-fast);"></span>Last Traversed Route</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Step Log</h2>
-        </div>
-        <div class="panel-body" style="max-height: 220px; overflow: auto; padding: 0;">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Step</th>
-                <th>Location</th>
-                <th>Activity</th>
-                <th>Route</th>
-                <th>Meal</th>
-                <th>Balance</th>
-                <th>Reward</th>
-              </tr>
-            </thead>
-            <tbody id="sim-log-tbody"></tbody>
-          </table>
-        </div>
-      </div>
+  <div class="stack-col">
+    <div id="sim-stale-banner" class="notice-bar" hidden>
+      <span>Konfigurasi berubah sejak simulasi ini dimulai. Reset sesi untuk menerapkan aturan terbaru.</span>
+      <button id="btn-sim-apply-new" class="btn btn-sm btn-primary" type="button">Terapkan &amp; Reset</button>
     </div>
 
-    <div class="stack-col">
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Biometrics &amp; Finance</h2>
-        </div>
-        <div class="panel-body stack-col" style="gap: 10px;">
-          <div class="metric-strip">
-            <div class="metric-box">
-              <div class="metric-box-label">Balance (IDR)</div>
-              <div class="metric-box-value mono" id="sim-balance-val">-</div>
+    <div class="split-layout">
+      <div class="stack-col">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Simulasi &amp; Replay Peta</h2>
+              <p class="panel-sub" id="sim-step-subtitle">Step 0 · Siap dijalankan</p>
             </div>
-            <div class="metric-box">
-              <div class="metric-box-label">Attendance</div>
-              <div class="metric-box-value mono" id="sim-attend-val">-</div>
-            </div>
-            <div class="metric-box">
-              <div class="metric-box-label">Pantry Value</div>
-              <div class="metric-box-value mono" id="sim-pantry-val">-</div>
+            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;">
+              <input id="sim-seed-input" class="control-input num" type="number" min="0" step="1" value="42" style="width: 70px;" aria-label="Seed Episode">
+              <select id="sim-policy-mode" class="control-select" style="width: 165px;">
+                <option value="heuristic">Heuristic Expert</option>
+                <option value="model">Model Terlatih (Run)</option>
+              </select>
+              <select id="sim-run-select" class="control-select" style="width: 245px;" hidden></select>
+              <select id="sim-ckpt-select" class="control-select" style="width: 78px;" hidden>
+                <option value="best">best</option>
+                <option value="final">final</option>
+              </select>
+              <button id="btn-sim-autostep" class="btn btn-sm btn-primary" type="button">Auto Step</button>
+              <button id="btn-sim-play" class="btn btn-sm" type="button">Play</button>
+              <button id="btn-sim-reset" class="btn btn-sm" type="button">Reset</button>
             </div>
           </div>
-          <div id="sim-meters" class="stack-col" style="gap: 8px;"></div>
+          <div class="graph-stage" style="height: 440px;">
+            <svg id="sim-graph-svg" class="graph-svg" viewBox="0 0 820 440"></svg>
+            <div class="map-zoom-controls" aria-label="Kontrol Zoom Peta Simulasi">
+              <button id="btn-sim-zoom-in" class="map-zoom-btn" type="button" title="Perbesar">+</button>
+              <button id="btn-sim-zoom-out" class="map-zoom-btn" type="button" title="Perkecil">−</button>
+              <button id="btn-sim-fit" class="map-zoom-btn" type="button" title="Pas ke Layar">Fit</button>
+            </div>
+            <div class="graph-legend">
+              <span class="legend-item"><span class="legend-dot" style="background: var(--graph-agent);"></span>Posisi Agen</span>
+              <span class="legend-item"><span class="legend-dot" style="background: var(--graph-route-fast);"></span>Rute Terakhir</span>
+              <span class="legend-item"><span class="legend-dot" style="background: var(--graph-home);"></span>Home</span>
+              <span class="legend-item"><span class="legend-dot" style="background: var(--graph-campus);"></span>Kampus / Hub</span>
+              <span class="legend-item"><span class="legend-dot" style="background: var(--graph-third-place);"></span>Kafe</span>
+            </div>
+            <div class="graph-scale-bar num">
+              <div id="sim-scale-line" class="scale-bar-line" style="width: 100px;"></div>
+              <span id="sim-scale-label">1 km</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Riwayat Langkah</h2>
+          </div>
+          <div class="panel-body" style="max-height: 230px; overflow: auto; padding: 0;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Waktu</th>
+                  <th>Lokasi</th>
+                  <th>Aktivitas</th>
+                  <th>Rute</th>
+                  <th>Makan</th>
+                  <th>Saldo</th>
+                  <th>Reward</th>
+                </tr>
+              </thead>
+              <tbody id="sim-log-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Manual Masked Action</h2>
-          <button id="btn-sim-step" class="btn btn-sm btn-primary" type="button">Execute Step</button>
+      <div class="stack-col">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Kondisi Mahasiswa &amp; Pengeluaran</h2>
+          </div>
+          <div class="panel-body stack-col" style="gap: 10px;">
+            <div id="sim-context-strip" class="stat-pills"></div>
+            <div class="metric-strip">
+              <div class="metric-box">
+                <div class="metric-box-label">Saldo Sisa</div>
+                <div class="metric-box-value num" id="sim-balance-val">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-box-label">Kehadiran</div>
+                <div class="metric-box-value num" id="sim-attend-val">-</div>
+              </div>
+              <div class="metric-box">
+                <div class="metric-box-label">Stok Dapur</div>
+                <div class="metric-box-value num" id="sim-pantry-val">-</div>
+              </div>
+            </div>
+            <div id="sim-meters" class="stack-col" style="gap: 8px;"></div>
+            <div id="sim-spending-strip" class="kv-panel"></div>
+            <div id="sim-pantry-strip" class="kv-panel"></div>
+          </div>
         </div>
-        <div class="panel-body stack-col" style="gap: 8px;" id="sim-action-form"></div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Kendali Aksi Manual</h2>
+            <button id="btn-sim-step" class="btn btn-sm btn-primary" type="button">Jalankan Step</button>
+          </div>
+          <div class="panel-body stack-col" style="gap: 8px;" id="sim-action-form"></div>
+        </div>
       </div>
     </div>
   </div>

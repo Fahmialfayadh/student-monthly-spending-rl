@@ -1,47 +1,116 @@
-<section id="panel-config" class="tab-panel" role="tabpanel" hidden>
+<section id="panel-config" class="tab-panel" role="tabpanel">
   <div class="stack-col">
     <div class="panel">
       <div class="panel-head">
         <div>
-          <h2>Local YAML Sync &amp; Save</h2>
-          <p class="panel-sub">Simpan konfigurasi custom ke configs/custom/*.yaml atau sinkronkan ke env_config.yaml</p>
+          <h2>Keuangan &amp; Anggaran Bulanan</h2>
+          <p class="panel-sub">Atur pemasukan bulanan, biaya tetap, dan batas saldo aman mahasiswa sebelum mengatur peta</p>
         </div>
-        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
-          <input id="save-config-name" class="control-input mono" style="width: 190px;" placeholder="my_campus_config">
-          <label class="checkbox-row" data-tooltip="Jika dicentang, file env_config.yaml di root repo ikut diperbarui agar langsung dipakai saat training notebook/CLI.">
-            <input id="save-set-active" type="checkbox">
-            <span class="tooltip-trigger">Sync env_config.yaml</span>
-          </label>
-          <button id="btn-save-custom" class="btn btn-primary btn-sm" type="button">Save YAML</button>
-          <button id="btn-export-yaml" class="btn btn-sm" type="button">Download YAML</button>
-        </div>
+        <button id="btn-open-save-dialog" class="btn btn-sm" type="button">Simpan / Kelola File</button>
       </div>
-      <div class="panel-body">
-        <div id="config-meta-bar" class="mono" style="font-size: 11px; color: var(--ink-secondary);"></div>
+      <div class="panel-body stack-col" style="gap: 12px;">
+        <div class="metric-strip" id="finance-summary-strip"></div>
+        <div id="finance-core-fields" class="field-row-3"></div>
+        <div id="config-meta-bar" class="kv-panel"></div>
       </div>
     </div>
 
     <div class="panel">
       <div class="panel-head">
         <div>
-          <h2>External Food Catalog</h2>
-          <p class="panel-sub">Kelola daftar tempat makan / kantin / delivery yang bisa dipilih di tiap lokasi pada Spatial Graph</p>
+          <h2>Kebiasaan &amp; Karakter Mahasiswa</h2>
+          <p class="panel-sub">Sesuaikan tingkat kemalasan memasak, seberapa cepat bosan atau jenuh (craving kafe), dan kondisi awal</p>
         </div>
-        <button id="btn-add-food" class="btn btn-sm" type="button">+ Add Food Option</button>
       </div>
-      <div class="panel-body" id="external-foods-container"></div>
+      <div class="panel-body stack-col" style="gap: 14px;" id="lifestyle-habits-container"></div>
     </div>
-
-    <div class="config-sections" id="env-config-sections"></div>
 
     <div class="panel">
       <div class="panel-head">
         <div>
-          <h2>Weekly Class Schedule</h2>
-          <p class="panel-sub">Klik sel untuk toggle jadwal kuliah per hari dan slot waktu</p>
+          <h2>Jadwal Kuliah Mingguan</h2>
+          <p class="panel-sub">Klik sel untuk menandai slot waktu kuliah wajib setiap harinya</p>
         </div>
       </div>
-      <div class="panel-body" id="weekly-schedule-container"></div>
+      <div class="panel-body" id="weekly-schedule-container" style="overflow-x: auto;"></div>
     </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Katalog Makanan &amp; Warung Eksternal</h2>
+          <p class="panel-sub">Atur harga dan tingkat kenyang (0–100 positif), lalu aktifkan per lokasi di tab Peta &amp; Mobilitas</p>
+        </div>
+        <button id="btn-add-food" class="btn btn-sm" type="button">+ Tambah Makanan</button>
+      </div>
+      <div class="panel-body" id="external-foods-container" style="overflow-x: auto;"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>Bahan Dapur &amp; Stok Awal</h2>
+          <p class="panel-sub">Atur harga, daya tahan (Hari), nutrisi, atau tambahkan bahan/minuman sendiri seperti kopi, mie instan, atau susu</p>
+        </div>
+        <button id="btn-toggle-add-ing" class="btn btn-sm" type="button">+ Tambah Bahan Dapur</button>
+      </div>
+      <div class="panel-body stack-col" style="gap: 12px;">
+        <div id="add-ingredient-box" class="kv-panel" style="padding: 12px;" hidden>
+          <div class="stack-col" style="gap: 10px;">
+            <div class="field-label" style="color: var(--ink-primary);">Tambah Bahan Dapur / Minuman Custom</div>
+            <div class="field-row-3">
+              <div class="field-group">
+                <label for="new-ing-label">Nama Bahan</label>
+                <input id="new-ing-label" class="control-input" placeholder="mis. Kopi Sachet / Mie Instan">
+              </div>
+              <div class="field-group">
+                <label for="new-ing-price">Harga / Pak (IDR)</label>
+                <input id="new-ing-price" class="control-input num" type="number" min="1000" step="500" value="18000">
+              </div>
+              <div class="field-group">
+                <label for="new-ing-units">Isi Unit / Pak</label>
+                <input id="new-ing-units" class="control-input num" type="number" min="1" step="1" value="10">
+              </div>
+            </div>
+            <div class="field-row-3">
+              <div class="field-group">
+                <label for="new-ing-days">Daya Tahan (Hari)</label>
+                <input id="new-ing-days" class="control-input num" type="number" min="0.5" step="0.5" value="30">
+              </div>
+              <div class="field-group">
+                <label for="new-ing-init">Stok Awal (Unit)</label>
+                <input id="new-ing-init" class="control-input num" type="number" min="0" step="1" value="5">
+              </div>
+              <div class="field-group">
+                <label for="new-ing-satiety" class="tooltip-trigger" data-tooltip="Seberapa mengenyangkan per 1 unit (0–100). Untuk kopi/minuman bisa diisi 0–10.">Tingkat Kenyang (0–100)</label>
+                <input id="new-ing-satiety" class="control-input num" type="number" min="0" max="100" step="1" value="5">
+              </div>
+            </div>
+            <div class="field-row-3" style="align-items: end;">
+              <div class="field-group">
+                <label for="new-ing-energy" class="tooltip-trigger" data-tooltip="Tambahan energi per 1 unit yang dikonsumsi.">Efek Energi (+)</label>
+                <input id="new-ing-energy" class="control-input num" type="number" step="1" value="15">
+              </div>
+              <div class="field-group">
+                <label for="new-ing-mood" class="tooltip-trigger" data-tooltip="Perubahan mood per 1 unit yang dikonsumsi (positif = bikin senang).">Efek Mood (+/-)</label>
+                <input id="new-ing-mood" class="control-input num" type="number" step="0.5" value="8">
+              </div>
+              <div style="display: flex; justify-content: flex-end; gap: 6px;">
+                <button id="btn-cancel-add-ing" class="btn btn-sm" type="button">Batal</button>
+                <button id="btn-confirm-add-ing" class="btn btn-sm btn-primary" type="button">Tambahkan</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="ingredients-days-container" style="overflow-x: auto;"></div>
+      </div>
+    </div>
+
+    <details class="section-disclosure">
+      <summary>Pengaturan Lanjutan RL (Bobot Reward, Shaping, Terminasi &amp; Dinamika Internal)</summary>
+      <div class="disclosure-body">
+        <div class="config-sections" id="env-config-sections"></div>
+      </div>
+    </details>
   </div>
 </section>

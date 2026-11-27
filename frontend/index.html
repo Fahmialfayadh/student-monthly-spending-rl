@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Student Survival RL — Spatial Graph Studio</title>
+  <title>Student Survival Monthly RL</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
     rel="stylesheet"
   >
   <link rel="stylesheet" href="/css/tokens.css">
@@ -19,37 +19,84 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div class="brand-titles">
         <h1>Student Survival RL</h1>
-        <p class="header-subtitle">Spatial-Graph Configurable Framework</p>
+        <p class="header-subtitle">Monthly Budget &amp; Spatial Framework</p>
       </div>
     </div>
 
-    <nav class="primary-tabs" role="tablist" aria-label="Workspace Pages">
-      <a class="tab-button is-active" href="#graph" role="tab" data-tab="graph" aria-selected="true">
-        Spatial Graph
+    <nav class="primary-tabs" role="tablist" aria-label="Halaman Workspace">
+      <a class="tab-button is-active" href="#config" role="tab" data-tab="config" aria-selected="true">
+        Uang, Makan &amp; Jadwal
       </a>
-      <a class="tab-button" href="#config" role="tab" data-tab="config" aria-selected="false">
-        Env &amp; Rules
-      </a>
-      <a class="tab-button" href="#simulation" role="tab" data-tab="simulation" aria-selected="false">
-        Live Sandbox
+      <a class="tab-button" href="#graph" role="tab" data-tab="graph" aria-selected="false">
+        Peta &amp; Mobilitas
       </a>
       <a class="tab-button" href="#training" role="tab" data-tab="training" aria-selected="false">
-        Training &amp; Runs
+        Latih &amp; Analisis AI
+      </a>
+      <a class="tab-button" href="#simulation" role="tab" data-tab="simulation" aria-selected="false">
+        Simulasi &amp; Replay
       </a>
     </nav>
 
     <div class="header-actions">
-      <select id="global-config-select" class="control-select mono" style="width: 210px;" aria-label="Active Configuration"></select>
-      <button id="btn-global-validate" class="btn btn-sm" type="button">Validate</button>
-      <button id="btn-global-save" class="btn btn-primary btn-sm" type="button">Save Local</button>
+      <select id="global-config-select" class="control-select" style="width: 225px;" aria-label="Konfigurasi Aktif"></select>
+      <button id="btn-global-save" class="btn btn-sm" type="button">Simpan / File</button>
       <span id="global-status-pill" class="status-pill">
         <span id="global-status-dot" class="status-dot"></span>
-        <span id="global-status-text">Loading...</span>
+        <span id="global-status-text">Memuat...</span>
       </span>
     </div>
   </header>
 
   <main id="workspace-main" class="workspace-main"></main>
+
+  <div id="unsaved-bar" class="unsaved-bar" role="region" aria-label="Perubahan belum disimpan" hidden>
+    <div class="unsaved-bar-info">
+      <span class="status-dot is-warn" aria-hidden="true"></span>
+      <span>Ada perubahan yang belum disimpan</span>
+      <span id="unsaved-bar-name" class="unsaved-bar-name code-id"></span>
+    </div>
+    <div class="unsaved-bar-actions">
+      <button id="btn-unsaved-discard" class="btn btn-sm" type="button">Batal Perubahan</button>
+      <button id="btn-unsaved-save" class="btn btn-sm btn-primary" type="button">Simpan Perubahan</button>
+    </div>
+  </div>
+
+  <dialog id="save-config-dialog" class="app-dialog" aria-labelledby="dlg-save-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="dlg-save-title">Simpan &amp; Kelola Konfigurasi</h2>
+        <p class="panel-sub">Simpan perubahan ke configs/custom/*.yaml, validasi, atau ekspor file YAML</p>
+      </div>
+      <button id="dlg-btn-close" class="btn btn-sm" type="button" aria-label="Tutup">Tutup</button>
+    </div>
+    <div class="dialog-body stack-col" style="gap: 14px;">
+      <div class="field-group">
+        <label for="dlg-save-name">Nama Konfigurasi Lokal</label>
+        <input id="dlg-save-name" class="control-input code-id" placeholder="mis. kos_bandung_v1">
+      </div>
+      <label class="checkbox-row">
+        <input id="dlg-save-sync" type="checkbox">
+        <span class="tooltip-trigger" data-tooltip="Menyalin konfigurasi ini ke env_config.yaml di root repo agar langsung terbaca oleh script atau notebook.">Sinkronkan juga ke env_config.yaml</span>
+      </label>
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+        <button id="dlg-btn-validate" class="btn btn-sm" type="button">Cek Validasi</button>
+        <button id="dlg-btn-save" class="btn btn-sm btn-primary" type="button">Simpan ke Disk</button>
+      </div>
+      <div class="dialog-divider"></div>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button id="dlg-btn-export" class="btn btn-sm" type="button">Unduh YAML</button>
+          <label class="btn btn-sm" style="margin: 0;">
+            Impor YAML
+            <input id="dlg-input-import" type="file" accept=".yaml,.yml" hidden>
+          </label>
+        </div>
+        <button id="dlg-btn-delete" class="btn btn-sm btn-danger" type="button" hidden>Hapus Custom Ini</button>
+      </div>
+      <div id="dlg-meta-box" class="kv-panel"></div>
+    </div>
+  </dialog>
 
   <div id="toast-banner" class="toast-banner" role="status" aria-live="polite"></div>
 

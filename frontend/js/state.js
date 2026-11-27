@@ -3,17 +3,19 @@ export const appState = {
   configsList: [],
   activeMeta: {
     scope: 'preset',
-    name: 'surabaya_its',
+    name: 'standard_student',
     sha256: null,
     dirty: false,
   },
   worldConfig: null,
   trainingProfile: null,
-  selectedGraphItem: null, // { type: 'node' | 'edge', id: string }
+  selectedGraphItem: null,
   previewedPath: null,
   simSession: null,
+  simStale: false,
   simLogs: [],
   runs: [],
+  replayRunId: null,
 };
 
 const listeners = new Set();
@@ -31,10 +33,11 @@ export function notify(reason = 'update') {
 
 export function markDirty() {
   appState.activeMeta.dirty = true;
+  if (appState.simSession) appState.simStale = true;
   notify('dirty');
 }
 
-export function showToast(message, durationMs = 3200) {
+export function showToast(message, durationMs = 3600) {
   const el = document.getElementById('toast-banner');
   if (!el) return;
   el.textContent = message;

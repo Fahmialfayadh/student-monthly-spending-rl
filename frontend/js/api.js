@@ -1,3 +1,19 @@
+function formatApiError(detail, status) {
+  if (!detail) return `HTTP ${status}`;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .slice(0, 4)
+      .map((item) => {
+        const loc = Array.isArray(item.loc) ? item.loc.filter((p) => p !== 'body').join('.') : '';
+        const msg = item.msg || JSON.stringify(item);
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .join(' | ');
+  }
+  return JSON.stringify(detail);
+}
+
 async function request(url, options = {}) {
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -11,10 +27,7 @@ async function request(url, options = {}) {
     data = { detail: text };
   }
   if (!res.ok) {
-    const detail = data && data.detail
-      ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
-      : `HTTP ${res.status}`;
-    throw new Error(detail);
+    throw new Error(formatApiError(data?.detail, res.status));
   }
   return data;
 }
@@ -24,6 +37,9 @@ export const api = {
   listConfigs: () => request('/configs'),
   getConfig: (scope, name) => request(`/configs/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`),
   saveConfig: (payload) => request('/configs/save', { method: 'POST', body: JSON.stringify(payload) }),
+  renderYaml: (config) => request('/configs/render-yaml', { method: 'POST', body: JSON.stringify(config) }),
+  importYaml: (payload) => request('/configs/import-yaml', { method: 'POST', body: JSON.stringify(payload) }),
+  deleteCustomConfig: (name) => request(`/configs/custom/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   validateConfig: (config) => request('/config/validate', { method: 'POST', body: JSON.stringify(config) }),
   previewRoute: (payload) => request('/graph/preview-route', { method: 'POST', body: JSON.stringify(payload) }),
 
@@ -41,10 +57,14 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload),
   }),
+  deleteSimSession: (sid) => request(`/sim/sessions/${encodeURIComponent(sid)}`, { method: 'DELETE' }),
 
   validateTraining: (payload) => request('/training/validate', { method: 'POST', body: JSON.stringify(payload) }),
   startTraining: (payload) => request('/training/start', { method: 'POST', body: JSON.stringify(payload) }),
+  stopTrainingJob: (jobId) => request(`/training/jobs/${encodeURIComponent(jobId)}/stop`, { method: 'POST' }),
   listTrainingJobs: () => request('/training/jobs'),
   listRuns: () => request('/runs'),
   getRunDetail: (runId) => request(`/runs/${encodeURIComponent(runId)}`),
+  getRunTrace: (runId) => request(`/runs/${encodeURIComponent(runId)}/trace?limit=300`),
+  deleteRun: (runId) => request(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
 };
