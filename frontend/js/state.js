@@ -5,6 +5,7 @@ export const appState = {
     scope: 'preset',
     name: 'standard_student',
     sha256: null,
+    canonicalSha256: null,
     dirty: false,
   },
   worldConfig: null,

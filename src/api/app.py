@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -52,6 +52,14 @@ def create_app() -> FastAPI:
             subpath = frontend_dir / subdir
             if subpath.exists():
                 application.mount(f"/{subdir}", StaticFiles(directory=str(subpath)), name=subdir)
+
+        @application.middleware("http")
+        async def disable_static_cache(request: Request, call_next):
+            response = await call_next(request)
+            path = request.url.path
+            if path == "/" or path.startswith(("/js/", "/css/", "/partials/")):
+                response.headers["Cache-Control"] = "no-store, max-age=0"
+            return response
 
         @application.get("/", include_in_schema=False)
         def serve_index() -> FileResponse:

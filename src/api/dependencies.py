@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+import yaml
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -54,6 +55,12 @@ def validate_config_slug(name: str) -> str:
 
 def compute_text_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def compute_canonical_world_sha256(cfg: WorldConfig) -> str:
+    """Hash kanonik YAML yang identik dengan file sementara saat training."""
+    canonical = yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False)
+    return compute_text_sha256(canonical)
 
 
 def resolve_scoped_config_path(scope: str, name: str) -> Path:

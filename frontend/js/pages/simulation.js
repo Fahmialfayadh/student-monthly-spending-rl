@@ -320,7 +320,10 @@ export function initSimulationPage(root) {
 
   return {
     async refresh() {
-      const runs = (appState.runs || []).filter((r) => r.has_best_checkpoint || r.has_final_checkpoint);
+      const runs = (appState.runs || []).filter((r) => (
+        (r.has_best_checkpoint || r.has_final_checkpoint)
+        && (r.final_summary !== null || Number(r.eval_points_count || 0) > 1 || r.run_id === appState.replayRunId)
+      ));
       const modelOption = policyModeSel.querySelector('option[value="model"]');
       if (modelOption) modelOption.disabled = runs.length === 0;
       runSel.innerHTML = runs.map((r) => `<option value="${escapeHtml(r.run_id)}">${escapeHtml(formatRunDisplayLabel(r))}</option>`).join('');

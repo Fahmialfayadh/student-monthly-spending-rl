@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from src.api.dependencies import ROOT_DIR
 
@@ -18,11 +18,18 @@ def _runs_root() -> Path:
 
 
 @router.get("")
-def list_runs() -> dict[str, list[dict[str, Any]]]:
-    """Menampilkan daftar seluruh experiment run di direktori runs/."""
+def list_runs(request: Request) -> dict[str, list[dict[str, Any]]]:
+    """Menampilkan daftar seluruh experiment run di direktori runs/ beserta status eval terbarunya."""
     root = _runs_root()
     if not root.exists():
         return {"runs": []}
+
+    active_jobs = getattr(request.app.state, "training_jobs", {}) or {}
+    running_run_ids = {
+        Path(j["run_dir"]).name
+        for j in active_jobs.values()
+        if j.get("status") == "running" and j.get("run_dir")
+    }
 
     items: list[dict[str, Any]] = []
     for run_dir in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -38,14 +45,41 @@ def list_runs() -> dict[str, list[dict[str, Any]]]:
             if summary_path.exists()
             else None
         )
+
+        eval_points_count = 0
+        latest_eval_summary: dict[str, Any] | None = None
+        eval_history_path = run_dir / "eval_history.csv"
+        if eval_history_path.exists():
+            try:
+                hist_df = pd.read_csv(eval_history_path)
+                eval_points_count = int(len(hist_df))
+                if eval_points_count > 0:
+                    last_row = hist_df.iloc[-1].to_dict()
+                    latest_eval_summary = {
+                        k: (v.item() if hasattr(v, "item") else v)
+                        for k, v in last_row.items()
+                        if pd.notna(v)
+                    }
+            except Exception:
+                pass
+
         items.append(
             {
                 "run_id": run_dir.name,
                 "experiment_name": train_cfg.get("experiment_name"),
+                "env_config_sha256": str(train_cfg.get("env_config_sha256") or "")[:12],
                 "timestamp": train_cfg.get("timestamp"),
                 "total_timesteps": train_cfg.get("total_timesteps"),
                 "has_best_checkpoint": (run_dir / "best_model.zip").exists(),
                 "has_final_checkpoint": (run_dir / "final_model.zip").exists(),
+                "eval_points_count": eval_points_count,
+                "latest_eval_step": (
+                    int(latest_eval_summary.get("timesteps", 0))
+                    if latest_eval_summary
+                    else 0
+                ),
+                "is_running": run_dir.name in running_run_ids,
+                "latest_eval_summary": latest_eval_summary,
                 "final_summary": summary,
             }
         )

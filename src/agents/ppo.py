@@ -261,6 +261,7 @@ class StudentPPOAgent:
         stop_event: Any = None,
         progress_callback: Any = None,
         log_callback: Any = None,
+        on_run_dir_ready: Any = None,
     ) -> dict[str, Any]:
         return self.trainer.run(
             total_timesteps=total_timesteps,
@@ -277,6 +278,7 @@ class StudentPPOAgent:
             stop_event=stop_event,
             progress_callback=progress_callback,
             log_callback=log_callback,
+            on_run_dir_ready=on_run_dir_ready,
         )
 
     def save(

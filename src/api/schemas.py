@@ -86,3 +86,5 @@ class TrainingStartRequest(BaseModel):
     config: dict[str, Any] | None = None
     preset_name: str | None = "standard_student"
     custom_config_name: str | None = None
+    resume_from_run_id: str | None = None
+    resume_checkpoint: Literal["best", "final"] = "best"

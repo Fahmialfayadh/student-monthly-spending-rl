@@ -226,6 +226,7 @@ class ExperimentTrainer:
         stop_event: Any = None,
         progress_callback: Any = None,
         log_callback: Any = None,
+        on_run_dir_ready: Any = None,
     ) -> dict[str, Any]:
         config_sha256 = compute_file_sha256(self.agent.yaml_path)
         safe_experiment_name = experiment_name.strip().replace(" ", "_")
@@ -281,6 +282,8 @@ class ExperimentTrainer:
         (run_dir / "train_config.json").write_text(
             json.dumps(train_metadata, indent=2), encoding="utf-8"
         )
+        if on_run_dir_ready is not None:
+            on_run_dir_ready(run_dir)
 
         # LR tetap konstan sampai survival tercapai, lalu anneal halus hingga 10% base LR
         base_learning_rate = float(self.agent.hyperparameters["learning_rate"])

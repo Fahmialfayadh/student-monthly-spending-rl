@@ -150,7 +150,7 @@ def test_standard_graph_routing_and_1_5km_walk_parity() -> None:
     env = StudentLifeEnv(STANDARD_YAML)
     obs, _ = env.reset(seed=1)
 
-    assert env.balance_idr == 1_750_000.0
+    assert env.balance_idr == env.finance.initial_operational_budget_idr
     assert obs.shape == (56,)
     assert env.action_space.nvec.tolist() == [8, 2, 6, 18, 2, 15]
 
@@ -536,6 +536,17 @@ def test_typed_schema_training_api_runs_and_autostep(
             "survival_phase_timesteps": 64,
         },
     }
+    # Deterministic single-job lock verification (409 Conflict when any job is running)
+    app.state.training_jobs = {
+        "dummy_running": {"job_id": "dummy_running", "status": "running", "experiment_name": "busy"}
+    }
+    r_locked = client.post(
+        "/training/start",
+        json={"preset_name": "minimal_dorm", "training_profile": mini_profile},
+    )
+    assert r_locked.status_code == 409
+    app.state.training_jobs.clear()
+
     r_start = client.post(
         "/training/start",
         json={"preset_name": "minimal_dorm", "training_profile": mini_profile},
@@ -558,9 +569,12 @@ def test_typed_schema_training_api_runs_and_autostep(
     assert client.post("/training/jobs/nonexistent/stop").status_code == 404
 
     runs_list = client.get("/runs").json()["runs"]
-    assert len(runs_list) == 1
+    assert len(runs_list) >= 1
     run_id = runs_list[0]["run_id"]
     assert run_id.startswith("api_smoke_")
+    assert runs_list[0]["eval_points_count"] >= 1
+    assert runs_list[0]["latest_eval_summary"] is not None
+    assert runs_list[0]["is_running"] is False
     run_detail = client.get(f"/runs/{run_id}").json()
     assert run_detail["final_summary"] is not None
     run_trace = client.get(f"/runs/{run_id}/trace").json()
@@ -584,9 +598,32 @@ def test_typed_schema_training_api_runs_and_autostep(
     assert r_rst.status_code == 200 and r_rst.json()["graph_state"]["current_step"] == 0
     client.delete(f"/sim/sessions/{sid}")
 
-    # 5. Delete run cleanly
-    r_del_run = client.delete(f"/runs/{run_id}")
-    assert r_del_run.status_code == 200 and r_del_run.json()["deleted"] is True
+    # 5. Resume training from saved run_id
+    resume_profile = copy.deepcopy(mini_profile)
+    resume_profile["schedule"]["total_timesteps"] = 192
+    r_res = client.post(
+        "/training/start",
+        json={
+            "preset_name": "minimal_dorm",
+            "training_profile": resume_profile,
+            "resume_from_run_id": run_id,
+            "resume_checkpoint": "best",
+        },
+    )
+    assert r_res.status_code == 200
+    res_job_id = r_res.json()["job_id"]
+    res_job = None
+    for _ in range(60):
+        res_job = client.get(f"/training/jobs/{res_job_id}").json()
+        if res_job["status"] in ("completed", "failed"):
+            break
+        time.sleep(0.25)
+    assert res_job is not None and res_job["status"] == "completed", res_job
+
+    # 6. Delete run cleanly
+    for item in client.get("/runs").json()["runs"]:
+        r_del_run = client.delete(f"/runs/{item['run_id']}")
+        assert r_del_run.status_code == 200 and r_del_run.json()["deleted"] is True
     assert client.get("/runs").json()["runs"] == []
 
 

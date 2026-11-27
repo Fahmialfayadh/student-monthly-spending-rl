@@ -60,7 +60,13 @@ async function loadSelectedConfig(scope, name) {
   if (controllers.simulation?.onLeave) controllers.simulation.onLeave();
   const res = await api.getConfig(scope, name);
   appState.worldConfig = res.config;
-  appState.activeMeta = { scope: res.scope, name: res.name, sha256: res.sha256, dirty: false };
+  appState.activeMeta = {
+    scope: res.scope,
+    name: res.name,
+    sha256: res.sha256,
+    canonicalSha256: res.canonical_sha256 || res.sha256,
+    dirty: false,
+  };
   appState.selectedGraphItem = null;
   appState.previewedPath = null;
   appState.simSession = null;
@@ -68,6 +74,7 @@ async function loadSelectedConfig(scope, name) {
   appState.simLogs = [];
   setStatus('is-ok', `${res.scope}/${res.name}`);
   syncUnsavedBar();
+  notify('config_loaded');
   refreshActiveTab();
 }
 
@@ -171,7 +178,13 @@ function initSaveDialog() {
           : null,
         set_active_env_config: syncEl.checked,
       });
-      appState.activeMeta = { scope: 'custom', name: res.name, sha256: res.sha256, dirty: false };
+      appState.activeMeta = {
+        scope: 'custom',
+        name: res.name,
+        sha256: res.sha256,
+        canonicalSha256: res.canonical_sha256 || res.sha256,
+        dirty: false,
+      };
       syncUnsavedBar();
       showToast(`Tersimpan ke ${res.path}`);
       dialog.close();
@@ -210,7 +223,13 @@ function initSaveDialog() {
       });
       const loaded = await api.getConfig('custom', res.name);
       appState.worldConfig = loaded.config;
-      appState.activeMeta = { scope: 'custom', name: loaded.name, sha256: loaded.sha256, dirty: false };
+      appState.activeMeta = {
+        scope: 'custom',
+        name: loaded.name,
+        sha256: loaded.sha256,
+        canonicalSha256: loaded.canonical_sha256 || loaded.sha256,
+        dirty: false,
+      };
       syncUnsavedBar();
       showToast(`Berhasil impor ke ${res.path}`);
       dialog.close();

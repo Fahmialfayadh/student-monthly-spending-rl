@@ -22,35 +22,67 @@
         <div class="panel-head">
           <div>
             <h2>Status &amp; Live Log Training</h2>
-            <p class="panel-sub">Pantau progres BC Pretrain, evaluasi berkala PPO, dan hentikan kapan saja secara aman</p>
+            <p class="panel-sub">Maksimal 1 sesi training berjalan pada satu waktu untuk menjaga integritas checkpoint</p>
           </div>
           <button id="btn-refresh-runs" class="btn btn-sm" type="button">Muat Ulang</button>
         </div>
         <div class="panel-body" id="training-jobs-list">
-          <p class="panel-sub">Belum ada sesi training aktif pada server ini.</p>
+          <p class="panel-sub">Siap melatih. Atur durasi di sebelah kiri lalu tekan Mulai Training.</p>
         </div>
       </div>
 
       <div class="panel">
         <div class="panel-head">
           <div>
-            <h2>Analisis Hasil Run</h2>
-            <p class="panel-sub">Alokasi pengeluaran, kebiasaan hidup agen, dan kurva reward</p>
+            <h2 id="active-run-title">Hasil Model Konfigurasi Aktif</h2>
+            <p class="panel-sub" id="runs-panel-sub">Menampilkan progres terbaru untuk konfigurasi yang aktif</p>
           </div>
-          <button id="btn-replay-run" class="btn btn-sm btn-primary" type="button" hidden>Simulasi &amp; Replay di Peta</button>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button id="btn-replay-run" class="btn btn-sm btn-primary" type="button" hidden>Simulasi &amp; Replay di Peta</button>
+            <button id="btn-delete-run" class="btn btn-sm btn-danger" type="button" hidden>Hapus</button>
+          </div>
         </div>
         <div class="panel-body stack-col" style="gap: 12px;">
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <select id="runs-select" class="control-select" style="flex: 1;"></select>
-            <button id="btn-delete-run" class="btn btn-sm btn-danger" type="button" hidden>Hapus Run</button>
+          <div id="run-empty-state" class="panel-sub" hidden>
+            Belum ada model terlatih untuk konfigurasi ini. Tekan Mulai Training di sebelah kiri untuk melatih dan melihat grafiknya secara real-time.
           </div>
           <div id="run-summary-metrics" class="metric-strip"></div>
           <div id="run-allocation-panel" class="kv-panel"></div>
-          <div id="run-chart-container" style="border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px; background: var(--bg-subtle);">
-            <svg id="run-eval-svg" viewBox="0 0 540 200" style="width: 100%; height: 200px; display: block;"></svg>
+          <div id="run-chart-container" class="eval-chart-wrap" hidden>
+            <div class="eval-chart-toolbar">
+              <span id="eval-chart-readout" class="eval-chart-readout">Arahkan kursor ke titik evaluasi untuk detail metrik</span>
+              <div style="display: inline-flex; gap: 4px;">
+                <button id="btn-chart-zoom-out" class="btn btn-sm" type="button" title="Perkecil skala X">−</button>
+                <button id="btn-chart-zoom-in" class="btn btn-sm" type="button" title="Perbesar skala X">+</button>
+                <button id="btn-chart-fit" class="btn btn-sm" type="button" title="Pas ke lebar panel">Fit</button>
+              </div>
+            </div>
+            <div id="eval-chart-scroll" class="eval-chart-scroll">
+              <svg id="run-eval-svg" viewBox="0 0 540 220" style="width: 540px; height: 220px;"></svg>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end; border-top: 1px solid var(--border-subtle); padding-top: 8px;">
+            <button id="btn-open-run-history" class="inline-link-btn" type="button">Kelola Riwayat Run (0)</button>
           </div>
         </div>
       </div>
     </div>
   </div>
+
+  <dialog id="run-history-dialog" class="app-dialog" style="width: min(620px, calc(100vw - 32px));" aria-labelledby="dlg-runs-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="dlg-runs-title">Kelola Riwayat Run</h2>
+        <p class="panel-sub">Bersihkan eksperimen lama atau folder kosong (Step 0) yang tersimpan di runs/</p>
+      </div>
+      <button id="dlg-runs-close" class="btn btn-sm" type="button">Tutup</button>
+    </div>
+    <div class="dialog-body stack-col" style="gap: 10px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+        <span id="dlg-runs-count" class="hint-inline">0 folder run tersimpan</span>
+        <button id="btn-clean-empty-runs" class="btn btn-sm btn-danger" type="button">Hapus Semua Run Kosong (Step 0)</button>
+      </div>
+      <div id="dlg-runs-list" class="kv-panel" style="max-height: 360px; overflow-y: auto;"></div>
+    </div>
+  </dialog>
 </section>
