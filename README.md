@@ -93,6 +93,7 @@ Inspect step-by-step decisions on the spatial map using either manual masked con
 ├── tests/
 │   └── test_framework.py           # End-to-end schema, routing, pantry, RL & API tests
 ├── env_config.yaml                 # Active root environment template
+├── train_and_evaluate.ipynb        # End-to-end Jupyter / Colab training & analysis notebook
 └── pyproject.toml
 ```
 
@@ -116,7 +117,11 @@ uvicorn src.api.app:app --reload --port 8000
 
 Open `http://localhost:8000` in your browser to configure monthly budget/habits/pantry, edit the spatial graph, run training jobs with live logs, and replay trained agents.
 
-### 3. Programmatic Python Usage
+### 3. Notebook & Programmatic Training
+
+For Jupyter / Google Colab workflows (training, checkpoint recovery, budget allocation tables, and 30-day biometric/balance plots), open [train_and_evaluate.ipynb](train_and_evaluate.ipynb) and point `ENV_CONFIG_PATH` to any preset or custom YAML.
+
+Alternatively, invoke `StudentPPOAgent` directly from Python:
 
 ```python
 from src.agents import StudentPPOAgent
@@ -165,4 +170,4 @@ pytest -v tests/test_framework.py
 
 ## Privacy & Local Configuration
 
-All user-saved configurations (`configs/custom/*.yaml`), trained checkpoints (`*.zip`, `*.pkl`), experiment outputs (`runs/`), and personal notebooks (`main.ipynb`) are excluded via `.gitignore` so personal budgets, routines, and local runs remain private on disk. The tracked YAML files in `configs/presets/` and `env_config.yaml` contain illustrative template values intended to be customized.
+User-created configurations (`configs/custom/*.yaml`), trained model weights (`*.zip`, `*.pkl`), and experiment artifacts (`runs/`) are excluded via `.gitignore` by default so personal budgets and local runs remain private. Tracked YAML files in `configs/presets/` and `env_config.yaml` contain illustrative template values intended to be customized.
