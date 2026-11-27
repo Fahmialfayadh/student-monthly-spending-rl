@@ -202,7 +202,7 @@ class ActivitySpecConfig(BaseModel):
 
 
 class ExternalFoodSpecConfig(BaseModel):
-    id: str
+    id: str = ""
     label: str
     tier: Literal["budget", "varied"] = "budget"
     cost_idr: float = Field(ge=0.0)
@@ -295,6 +295,19 @@ class WorldConfig(BaseModel):
     academics: AcademicsConfig
     termination: TerminationConfig
     rewards: RewardsConfig
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_food_ids(cls, data: Any) -> Any:
+        if isinstance(data, dict) and isinstance(data.get("external_foods"), dict):
+            normalized_foods: dict[str, Any] = {}
+            for food_id, spec in data["external_foods"].items():
+                if isinstance(spec, dict) and not spec.get("id"):
+                    normalized_foods[food_id] = {**spec, "id": str(food_id)}
+                else:
+                    normalized_foods[food_id] = spec
+            data = {**data, "external_foods": normalized_foods}
+        return data
 
     @model_validator(mode="after")
     def _validate_references(self) -> "WorldConfig":

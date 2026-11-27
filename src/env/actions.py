@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import numpy as np
 
 from src.env.academics import AcademicSchedule
 from src.env.biometrics import BiometricsState
 from src.env.finance import FinanceManager
-from src.env.mobility import (
-    get_route_fare_bounds,
-    sample_idr_from_range,
-    try_minimarket_impulse,
-)
+from src.env.mobility import try_impulse_temptation
 from src.env.pantry import PantryManager
+from src.env.pricing import sample_idr_from_range
+from src.env.schema import (
+    ActivitySpecConfig,
+    ExternalFoodSpecConfig,
+    LocationNodeConfig,
+)
+from src.env.world_graph import RoutePreference, WorldGraph
 
 
 def parse_action_vector(action, action_dimensions: dict[str, list]) -> dict[str, object]:
@@ -37,10 +42,6 @@ def parse_action_vector(action, action_dimensions: dict[str, list]) -> dict[str,
 def _get_cooking_energy_requirements(
     cooking_gates: dict, mode_name: str, is_morning_step: bool
 ) -> tuple[float, float]:
-    """
-    Mengembalikan (energy_cost, min_energy) untuk cook_fresh atau meal_prep.
-    Pada step pagi_awal (step_in_day == 0), memasak menguras tenaga lebih besar.
-    """
     if mode_name == "cook_fresh":
         base_cost = float(cooking_gates["cook_fresh_energy_cost"])
         min_energy = float(cooking_gates["cook_fresh_min_energy"])
@@ -74,6 +75,21 @@ def _apply_eaten_meal(
     step_events["boredom_mood_penalty"] = boredom_penalty
 
 
+def select_food_for_node(
+    node: LocationNodeConfig,
+    tier: str,
+    external_foods: dict[str, ExternalFoodSpecConfig],
+) -> ExternalFoodSpecConfig | None:
+    """Memilih makanan eksternal pada node berdasarkan tier ('budget' atau 'varied')."""
+    if not node.food_options:
+        return None
+    node_foods = [external_foods[fid] for fid in node.food_options if fid in external_foods]
+    tier_matches = [f for f in node_foods if f.tier == tier]
+    if tier_matches:
+        return tier_matches[0]
+    return node_foods[0] if node_foods else None
+
+
 def try_pack_bekal_before_departure(
     bring_bekal: bool,
     biometrics_state: BiometricsState,
@@ -81,10 +97,6 @@ def try_pack_bekal_before_departure(
     pantry_config: dict,
     step_events: dict[str, object],
 ) -> bool:
-    """
-    Membungkus 1 porsi meal_prep dari kulkas ke kotak bekal sebelum berangkat ke kampus
-    tanpa mengorbankan slot sarapan/makan pada step yang sama.
-    """
     if not bring_bekal:
         return False
 
@@ -107,7 +119,7 @@ def try_pack_bekal_before_departure(
 def execute_meal_action(
     requested_meal_mode: str,
     requested_cook_quantities: dict[str, int],
-    current_location: str,
+    current_node: LocationNodeConfig,
     step_in_day: int,
     is_stress_burned_out: bool,
     finance_manager: FinanceManager,
@@ -115,22 +127,14 @@ def execute_meal_action(
     pantry_manager: PantryManager,
     pantry_config: dict,
     biometrics_config: dict,
+    external_foods: dict[str, ExternalFoodSpecConfig],
     step_events: dict[str, object],
 ) -> str:
-    """
-    Menjalankan fase makan & dapur sesuai lokasi aktual (Apartemen vs Kampus):
-    - cook_fresh / meal_prep (kompor + rice cooker; meal_prep mendukung batch parsial >= 2
-      dan langsung makan 1 porsi segar bila sedang lapar)
-    - reheat_or_eat_bekal (Smart-FIFO; bekal yang terbawa pulang tetap bisa dimakan di apartemen)
-    - budget_external_meal (Apartemen: apartemen_warung Rp 15k 1 opsi; Kampus: warung_hemat Rp 13k)
-    - varied_external_meal (Apartemen: delivery_food Rp 25k; Kampus: warung_variasi Rp 18k)
-    - skip
-    """
+    """Menjalankan fase makan & dapur sesuai kapabilitas node (`has_kitchen` & `food_options`)."""
     cooking_gates = pantry_config["cooking_costs_and_gates"]
-    external_food = biometrics_config["external_food_recovery"]
     step_dynamics = biometrics_config["step_dynamics"]
 
-    is_at_apartment = current_location == "apartment"
+    has_kitchen = current_node.has_kitchen
     is_morning_step = step_in_day == 0
     executed_mode = requested_meal_mode
     can_eat = biometrics_state.hunger >= float(step_dynamics["min_hunger_to_eat"])
@@ -149,7 +153,7 @@ def execute_meal_action(
         )
         total_units = sum(requested_cook_quantities.values())
         if (
-            is_at_apartment
+            has_kitchen
             and not is_stress_burned_out
             and total_units > 0
             and pantry_manager.has_enough_ingredients(requested_cook_quantities)
@@ -185,13 +189,12 @@ def execute_meal_action(
         actual_batch = min(max_batch_size, max_possible)
 
         if (
-            is_at_apartment
+            has_kitchen
             and not is_stress_burned_out
             and actual_batch >= min_batch_size
             and biometrics_state.energy >= min_energy
             and biometrics_state.mood >= float(cooking_gates["meal_prep_min_mood"])
         ):
-            # Skala ringan biaya energi bila batch parsial
             batch_energy_scale = 0.65 + 0.35 * (actual_batch / max_batch_size)
             biometrics_state.energy -= energy_cost * batch_energy_scale
             pantry_manager.consume_ingredients_fifo(
@@ -204,7 +207,6 @@ def execute_meal_action(
                 requested_cook_quantities
             )
 
-            # Jika sedang lapar saat selesai meal prep, 1 porsi langsung dimakan segar
             portions_to_store = actual_batch
             if can_eat:
                 _apply_eaten_meal(
@@ -233,13 +235,7 @@ def execute_meal_action(
                 step_events["morning_heavy_cooking"] = True
             return "meal_prep"
 
-        # Fallback natural: jika bahan hanya cukup 1 porsi dan sedang lapar, masak segar 1 porsi
-        if (
-            is_at_apartment
-            and not is_stress_burned_out
-            and can_eat
-            and max_possible >= 1
-        ):
+        if has_kitchen and not is_stress_burned_out and can_eat and max_possible >= 1:
             fresh_cost, fresh_min_e = _get_cooking_energy_requirements(
                 cooking_gates, "cook_fresh", is_morning_step
             )
@@ -266,8 +262,7 @@ def execute_meal_action(
 
     elif executed_mode == "reheat_or_eat_bekal":
         reheat_mood_delta = float(pantry_config["meal_composition_rules"]["reheat_mood_delta"])
-        if is_at_apartment:
-            # Bekal sisa yang terbawa pulang tetap bisa dimakan di apartemen sebelum basi
+        if has_kitchen:
             if pantry_manager.get_packed_lunch_total_portions() >= 1:
                 biometrics_state.energy -= float(cooking_gates["eat_bekal_energy_cost"])
                 bekal_portion = pantry_manager.pop_one_packed_lunch_portion(
@@ -321,33 +316,27 @@ def execute_meal_action(
                     meal_signature=str(bekal_portion["meal_signature"]),
                     step_events=step_events,
                 )
-                step_events["ate_bekal_at_campus"] = True
+                step_events["ate_bekal_outside"] = True
                 return "eat_bekal"
         executed_mode = "skip"
 
     elif executed_mode in ("budget_external_meal", "varied_external_meal"):
-        if is_at_apartment:
-            food_key = (
-                "apartemen_warung" if executed_mode == "budget_external_meal" else "delivery_food"
-            )
-        else:
-            food_key = (
-                "warung_hemat" if executed_mode == "budget_external_meal" else "warung_variasi"
-            )
-
-        food_profile = external_food[food_key]
-        if finance_manager.pay(float(food_profile["cost_idr"]), category="external_food"):
-            biometrics_state.energy -= float(food_profile.get("energy_cost", 0.0))
+        tier = "budget" if executed_mode == "budget_external_meal" else "varied"
+        food_spec = select_food_for_node(current_node, tier, external_foods)
+        if food_spec is not None and finance_manager.pay(
+            float(food_spec.cost_idr), category="external_food"
+        ):
+            biometrics_state.energy -= float(food_spec.energy_cost)
             _apply_eaten_meal(
                 biometrics_state,
                 pantry_manager,
-                hunger_delta=float(food_profile["hunger"]),
-                energy_gain=float(food_profile["energy"]),
-                mood_delta=float(food_profile["mood"]),
-                meal_signature=food_key,
+                hunger_delta=float(food_spec.hunger),
+                energy_gain=float(food_spec.energy),
+                mood_delta=float(food_spec.mood),
+                meal_signature=food_spec.id,
                 step_events=step_events,
             )
-            return food_key
+            return food_spec.id
         executed_mode = "skip"
 
     skip_threshold = float(step_dynamics["skip_meal_hunger_threshold"])
@@ -361,9 +350,40 @@ def execute_meal_action(
     return "skip"
 
 
+def _apply_default_wait_or_rest(
+    current_node: LocationNodeConfig,
+    is_night: bool,
+    biometrics_state: BiometricsState,
+    biometrics_config: dict,
+    activity_specs: dict[str, ActivitySpecConfig],
+) -> tuple[bool, str]:
+    if not current_node.can_sleep and not is_night:
+        biometrics_state.energy -= float(current_node.wait_energy_cost)
+        biometrics_state.mood += float(current_node.wait_mood_delta)
+        wait_id = next((aid for aid, s in activity_specs.items() if s.handler == "wait"), "wait")
+        return False, wait_id
+
+    step_dynamics = biometrics_config["step_dynamics"]
+    craving_cfg = biometrics_config["craving_and_cafe"]
+    if is_night:
+        biometrics_state.energy += float(step_dynamics["night_unwind_energy_gain"])
+        biometrics_state.mood += float(step_dynamics["night_unwind_mood_gain"])
+    else:
+        biometrics_state.energy += float(step_dynamics["rest_step_energy_gain"])
+        if biometrics_state.cafe_craving > float(craving_cfg["high_distraction_threshold"]):
+            biometrics_state.mood += float(step_dynamics["rest_step_high_craving_mood_delta"])
+        elif biometrics_state.cafe_craving <= float(craving_cfg["distraction_threshold"]):
+            biometrics_state.mood += float(step_dynamics["rest_step_mood_gain"])
+
+    rest_id = next((aid for aid, s in activity_specs.items() if s.handler == "rest"), "rest")
+    return False, rest_id
+
+
 def execute_activity_action(
-    effective_activity: str,
-    current_location: str,
+    effective_activity_id: str,
+    activity_specs: dict[str, ActivitySpecConfig],
+    current_node: LocationNodeConfig,
+    world_graph: WorldGraph,
     is_class_scheduled_now: bool,
     is_stress_burned_out: bool,
     step_in_day: int,
@@ -378,145 +398,143 @@ def execute_activity_action(
     pantry_manager: PantryManager,
     finance_config: dict,
     academics_config: dict,
-    mobility_config: dict,
     biometrics_config: dict,
     pantry_config: dict,
     step_events: dict[str, object],
-) -> tuple[bool, str, str]:
-    """
-    Menjalankan aktivitas utama sesuai lokasi dan mengembalikan
-    (attended_class, executed_activity, updated_location).
-    """
-    room_study_efficiency = biometrics_state.get_room_study_efficiency()
+) -> tuple[bool, str]:
+    """Menjalankan aktivitas secara generik berbasis handler dan kapabilitas `current_node`."""
+    spec = activity_specs[effective_activity_id]
+    handler = spec.handler
     is_night = step_in_day == (steps_per_day - 1)
     effective_climate = "rain" if is_raining else current_climate
-    updated_location = current_location
+    valid_targets = set(world_graph.resolve_activity_target_nodes(spec))
 
-    if effective_activity == "attend_class":
-        if is_class_scheduled_now and current_location == "campus":
+    if handler == "attend_schedule":
+        if is_class_scheduled_now and current_node.is_class_venue and current_node.id in valid_targets:
             biometrics_state.energy -= float(academics_config["class_attendance_energy_cost"])
-            return True, "attend_class", updated_location
-        effective_activity = "wait_at_department" if current_location == "campus" else "rest_or_sleep"
+            return True, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-    if effective_activity == "room_study":
-        max_stress_gate = float(academics_config["room_study_max_stress_gate"])
+    if handler == "study":
+        profile = current_node.study_profile
         if (
-            current_location == "apartment"
+            current_node.can_study
+            and current_node.id in valid_targets
             and not is_stress_burned_out
-            and biometrics_state.academic_stress <= max_stress_gate
+            and biometrics_state.academic_stress <= float(profile.max_stress_gate)
         ):
-            biometrics_state.energy -= float(academics_config["room_study_energy_cost"])
-            biometrics_state.academic_stress -= (
-                float(academics_config["room_study_stress_reduction"]) * room_study_efficiency
-            )
-            return False, "room_study", updated_location
-        effective_activity = "wait_at_department" if current_location == "campus" else "rest_or_sleep"
+            eff = biometrics_state.get_study_efficiency(profile.affected_by_craving_distraction)
+            biometrics_state.energy -= float(profile.energy_cost)
+            biometrics_state.academic_stress -= float(profile.stress_reduction) * eff
+            biometrics_state.mood += float(profile.mood_delta)
+            return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-    if effective_activity == "night_cramming":
-        if current_location == "apartment" and is_night and not is_stress_burned_out:
+    if handler == "night_cram":
+        if current_node.can_sleep and is_night and not is_stress_burned_out:
+            eff = biometrics_state.get_study_efficiency(
+                current_node.study_profile.affected_by_craving_distraction
+            )
             biometrics_state.energy -= float(academics_config["night_cramming_energy_cost"])
             biometrics_state.academic_stress -= (
-                float(academics_config["night_cramming_stress_reduction"]) * room_study_efficiency
+                float(academics_config["night_cramming_stress_reduction"]) * eff
             )
-            return False, "night_cramming", updated_location
-        effective_activity = "rest_or_sleep"
+            return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-    if effective_activity == "ccws_stay":
-        if current_location == "campus" and not is_night:
-            ccws_config = mobility_config["campus_hub_rules"]["ccws_stay"]
-            biometrics_state.energy -= float(ccws_config["energy_cost"])
-            biometrics_state.academic_stress -= float(ccws_config["stress_reduction_per_step"])
+    if handler == "hub_stay":
+        if current_node.id in valid_targets and not is_night:
+            profile = current_node.study_profile
+            eff = biometrics_state.get_study_efficiency(profile.affected_by_craving_distraction)
+            biometrics_state.energy -= float(profile.energy_cost)
+            biometrics_state.academic_stress -= float(profile.stress_reduction) * eff
+            biometrics_state.mood += float(profile.mood_delta)
 
-            # CCWS meredakan sebagian craving dengan batas bawah (floor) & diminishing returns harian
-            craving_floor = float(ccws_config["craving_floor"])
-            if biometrics_state.ccws_visits_today == 0:
-                craving_reduction = float(ccws_config["craving_reduction_first_visit"])
-                biometrics_state.mood += float(ccws_config.get("mood_gain_first_visit", 0.0))
-            else:
-                craving_reduction = float(ccws_config["craving_reduction_repeat_visit"])
-            if biometrics_state.cafe_craving > craving_floor:
-                biometrics_state.cafe_craving = max(
-                    craving_floor, biometrics_state.cafe_craving - craving_reduction
-                )
-            biometrics_state.ccws_visits_today += 1
+            if profile.craving_reset:
+                biometrics_state.cafe_craving = 0.0
+            elif profile.craving_relief > 0.0:
+                if profile.daily_diminishing_returns and biometrics_state.hub_visits_today > 0:
+                    relief = float(profile.repeat_craving_relief)
+                else:
+                    relief = float(profile.craving_relief)
+                    biometrics_state.mood += float(profile.first_visit_mood_gain)
+                floor = float(profile.craving_floor)
+                if biometrics_state.cafe_craving > floor and relief > 0.0:
+                    biometrics_state.cafe_craving = max(floor, biometrics_state.cafe_craving - relief)
 
+            biometrics_state.hub_visits_today += 1
             biometrics_state.apply_craving_buff(
-                duration_steps=int(ccws_config["buff_duration_steps"]),
-                rate_multiplier=float(ccws_config["buff_craving_rate_multiplier"]),
+                duration_steps=int(profile.buff_duration_steps),
+                rate_multiplier=float(profile.buff_craving_rate_multiplier),
             )
-            bought_impulse, impulse_hunger, impulse_mood = try_minimarket_impulse(
+
+            mobility_cfg = world_graph.mobility_cfg
+            impulse_item = (
+                mobility_cfg.impulse_items.get(current_node.impulse_item_id)
+                if current_node.impulse_item_id
+                else None
+            )
+            bought, imp_h, imp_m = try_impulse_temptation(
                 random_generator=random_generator,
                 finance_manager=finance_manager,
                 biometrics_state=biometrics_state,
                 finance_config=finance_config,
-                mobility_config=mobility_config,
-                base_temptation_probability=float(ccws_config["minimarket_base_temptation_prob"]),
+                impulse_item=impulse_item,
+                base_temptation_probability=float(current_node.temptation_prob),
                 effective_climate=effective_climate,
                 current_day=current_day,
             )
-            biometrics_state.hunger += impulse_hunger
-            biometrics_state.mood += impulse_mood
-            step_events["ccws_minimarket_impulse"] = bought_impulse
-            return False, "ccws_stay", updated_location
-        effective_activity = "rest_or_sleep"
+            if bought:
+                biometrics_state.hunger += imp_h
+                biometrics_state.mood += imp_m
+                step_events["node_minimarket_impulse"] = True
+            return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-    if effective_activity == "cafe_session":
-        cafe_config = biometrics_config["craving_and_cafe"]["cafe_session"]
-        rain_surge = float(mobility_config["rain_ojol_surge_multiplier"]) if is_raining else 1.0
-        # Jika dari kampus saat malam, pulang langsung ke apartemen setelah dari kafe (1x transport)
-        if current_location == "apartment" or is_night:
-            transport_range = cafe_config["transport_from_apartment_idr"]
-            destination_after_cafe = "apartment"
-        else:
-            transport_range = cafe_config["transport_from_campus_idr"]
-            destination_after_cafe = "campus"
+    if handler == "leisure_reset":
+        if current_node.id in valid_targets and current_node.leisure_spend_idr:
+            spend_range = current_node.leisure_spend_idr
+            min_spend = float(spend_range[0])
+            if finance_manager.can_afford(min_spend):
+                sampled_spend = sample_idr_from_range(random_generator, spend_range)
+                actual_spend = min(sampled_spend, finance_manager.balance_idr)
+                finance_manager.pay(actual_spend, category="cafe")
+                biometrics_state.energy -= float(current_node.leisure_energy_cost)
+                biometrics_state.hunger += float(current_node.leisure_hunger_delta)
+                biometrics_state.mood += float(current_node.leisure_mood_gain)
+                biometrics_state.academic_stress -= float(current_node.leisure_stress_reduction)
+                biometrics_state.cafe_craving = float(
+                    biometrics_config["craving_and_cafe"]["cafe_session"].get("craving_reset_to", 0.0)
+                )
+                biometrics_state.apply_craving_buff(
+                    duration_steps=int(current_node.leisure_buff_duration_steps),
+                    rate_multiplier=float(current_node.leisure_buff_craving_rate_multiplier),
+                )
+                step_events["cafe_spend_idr"] = actual_spend
+                return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-        min_transport = float(round(int(transport_range[0]) * rain_surge))
-        min_cafe_spend = float(cafe_config["cost_min_idr"])
-        min_total_cost = min_cafe_spend + min_transport
+    if handler == "wait":
+        if current_node.id in valid_targets and not is_night:
+            biometrics_state.energy -= float(current_node.wait_energy_cost)
+            biometrics_state.mood += float(current_node.wait_mood_delta)
+            return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-        if finance_manager.can_afford(min_total_cost):
-            sampled_transport = sample_idr_from_range(
-                random_generator, transport_range, multiplier=rain_surge
-            )
-            cafe_transport_idr = min(
-                sampled_transport, max(min_transport, finance_manager.balance_idr - min_cafe_spend)
-            )
-            sampled_spend = sample_idr_from_range(
-                random_generator,
-                [int(cafe_config["cost_min_idr"]), int(cafe_config["cost_max_idr"])],
-            )
-            cafe_spend_idr = min(
-                sampled_spend, max(min_cafe_spend, finance_manager.balance_idr - cafe_transport_idr)
-            )
-            finance_manager.pay(cafe_spend_idr, category="cafe")
-            finance_manager.pay(cafe_transport_idr, category="transport")
-            biometrics_state.energy -= float(cafe_config["energy_cost"])
-            biometrics_state.hunger += float(cafe_config.get("hunger_delta", 0.0))
-            biometrics_state.mood += float(cafe_config["mood_gain"])
-            biometrics_state.academic_stress -= float(cafe_config["stress_reduction"])
-            biometrics_state.cafe_craving = float(cafe_config["craving_reset_to"])
-            biometrics_state.apply_craving_buff(
-                duration_steps=int(cafe_config["buff_duration_steps"]),
-                rate_multiplier=float(cafe_config["buff_craving_rate_multiplier"]),
-            )
-            step_events["cafe_spend_idr"] = cafe_spend_idr
-            step_events["cafe_transport_idr"] = cafe_transport_idr
-            updated_location = destination_after_cafe
-            return False, "cafe_session", updated_location
-
-        effective_activity = "wait_at_department" if current_location == "campus" and not is_night else "rest_or_sleep"
-
-    if effective_activity == "wait_at_department":
-        if current_location == "campus" and not is_night:
-            wait_config = mobility_config["campus_hub_rules"]["wait_at_department"]
-            biometrics_state.energy -= float(wait_config["energy_cost"])
-            biometrics_state.mood += float(wait_config["mood_delta_per_step"])
-            return False, "wait_at_department", updated_location
-        effective_activity = "rest_or_sleep"
-
-    if effective_activity == "grocery_shop":
-        if current_location == "apartment":
+    if handler == "grocery_shop":
+        if current_node.has_grocery and current_node.id in valid_targets:
             ingredients_config = pantry_config["ingredients"]
             total_bundle_cost = sum(
                 float(ingredients_config[name]["pack_price_idr"])
@@ -543,118 +561,113 @@ def execute_activity_action(
                 if shopping_transport_cost > 0.0:
                     finance_manager.pay(shopping_transport_cost, category="transport")
                 step_events["purchased_groceries"] = purchased_items
-                return False, "grocery_shop", updated_location
-        effective_activity = "wait_at_department" if current_location == "campus" and not is_night else "rest_or_sleep"
+                return False, spec.id
+        return _apply_default_wait_or_rest(
+            current_node, is_night, biometrics_state, biometrics_config, activity_specs
+        )
 
-    # Default aman: di kampus siang tidak boleh tidur -> wait_at_department
-    if current_location == "campus" and not is_night:
-        wait_config = mobility_config["campus_hub_rules"]["wait_at_department"]
-        biometrics_state.energy -= float(wait_config["energy_cost"])
-        biometrics_state.mood += float(wait_config["mood_delta_per_step"])
-        return False, "wait_at_department", updated_location
-
-    step_dynamics = biometrics_config["step_dynamics"]
-    craving_cfg = biometrics_config["craving_and_cafe"]
-    if is_night:
-        # Tidak didobel dengan rest_step penuh karena tidur malam otomatis berjalan di akhir step
-        biometrics_state.energy += float(step_dynamics["night_unwind_energy_gain"])
-        biometrics_state.mood += float(step_dynamics["night_unwind_mood_gain"])
-    else:
-        biometrics_state.energy += float(step_dynamics["rest_step_energy_gain"])
-        # Rebahan di kamar saat sumpek/craving tinggi memulihkan energi, bukan mood
-        if biometrics_state.cafe_craving > float(craving_cfg["high_distraction_threshold"]):
-            biometrics_state.mood += float(step_dynamics["rest_step_high_craving_mood_delta"])
-        elif biometrics_state.cafe_craving <= float(craving_cfg["distraction_threshold"]):
-            biometrics_state.mood += float(step_dynamics["rest_step_mood_gain"])
-    return False, "rest_or_sleep", updated_location
+    return _apply_default_wait_or_rest(
+        current_node, is_night, biometrics_state, biometrics_config, activity_specs
+    )
 
 
 def build_action_masks(
     current_step: int,
-    current_location: str,
+    current_node_id: str,
     is_raining: bool,
     steps_per_day: int,
+    world_graph: WorldGraph,
+    activity_specs: dict[str, ActivitySpecConfig],
+    activity_order: list[str],
+    route_preferences: list[RoutePreference],
+    external_foods: dict[str, ExternalFoodSpecConfig],
     academics: AcademicSchedule,
     finance: FinanceManager,
     biometrics: BiometricsState,
     pantry: PantryManager,
     config: dict,
 ) -> np.ndarray:
-    """
-    Menghasilkan boolean mask datar (panjang 51) untuk 6 head terpadu MaskablePPO:
-    activity (8) + route (2) + meal_mode (6) + cook_combo (18) + bring_bekal (2) + grocery_bundle (15).
-    Setiap head dijamin memiliki minimal satu opsi True.
-    """
+    """Menghasilkan boolean action mask dinamis dari WorldGraph & ActivitySpec."""
     _, _, step_in_day, day_name = academics.get_time_context(current_step)
     step_def = academics.get_step_definition(step_in_day)
+    current_climate = str(step_def["climate"])
     current_ojol_tariff = str(step_def["ojol_tariff"])
     is_class_now = academics.is_class_scheduled(day_name, step_in_day)
-    is_at_apartment = current_location == "apartment"
     is_morning_step = step_in_day == 0
     is_night = step_in_day == (steps_per_day - 1)
 
+    current_node = world_graph.get_node(current_node_id)
     pantry_config = config["pantry_and_cooking"]
     cooking_gates = pantry_config["cooking_costs_and_gates"]
     biometrics_config = config["biometrics_and_psychology"]
-    external_food = biometrics_config["external_food_recovery"]
-    cafe_config = biometrics_config["craving_and_cafe"]["cafe_session"]
-    mobility_config = config["mobility_and_surabaya_climate"]
-    academics_config = config["academics"]
 
     can_eat = biometrics.hunger >= float(biometrics_config["step_dynamics"]["min_hunger_to_eat"])
     is_mood_burned_out = biometrics.is_mood_burned_out()
     is_stress_burned_out = biometrics.is_stress_burned_out()
 
-    min_direct_fare, _ = get_route_fare_bounds(
-        mobility_config, "direct_ojol", current_ojol_tariff, is_raining
-    )
-    min_transit_fare, _ = get_route_fare_bounds(
-        mobility_config, "transit_ccws_ojol", current_ojol_tariff, is_raining
-    )
-    can_commute_campus = (not is_at_apartment) or finance.can_afford(min_transit_fare)
-    can_reach_apartment = is_at_apartment or is_night or finance.can_afford(min_transit_fare)
-
-    # 1. Activity mask (8)
-    rain_surge = float(mobility_config["rain_ojol_surge_multiplier"]) if is_raining else 1.0
-    cafe_transport_key = (
-        "transport_from_apartment_idr"
-        if (is_at_apartment or is_night)
-        else "transport_from_campus_idr"
-    )
-    min_cafe_total = float(cafe_config["cost_min_idr"]) + float(
-        round(int(cafe_config[cafe_transport_key][0]) * rain_surge)
-    )
+    # 1. Activity mask (dinamis sesuai jumlah aktivitas)
     cheapest_bundle_price = min(
         pantry.get_grocery_bundle_cost_idr(i) for i in range(len(PantryManager.GROCERY_BUNDLES))
     )
-    grocery_commute_cost = 0.0 if (is_at_apartment or is_night) else min_transit_fare
+    activity_mask: list[bool] = []
+    for act_id in activity_order:
+        spec = activity_specs[act_id]
+        handler = spec.handler
+        targets = world_graph.resolve_activity_target_nodes(spec)
+        if is_night:
+            targets = [nid for nid in targets if not world_graph.get_node(nid).closes_at_night]
 
-    activity_mask = [
-        can_reach_apartment,  # 0: rest_or_sleep
-        is_class_now and (not is_night) and (not is_mood_burned_out) and can_commute_campus,  # 1: attend_class
-        (
-            can_reach_apartment
-            and (not is_mood_burned_out)
-            and (not is_stress_burned_out)
-            and biometrics.academic_stress <= float(academics_config["room_study_max_stress_gate"])
-        ),  # 2: room_study
-        (not is_night) and can_commute_campus,  # 3: ccws_stay (boleh juga akhir pekan)
-        finance.can_afford(min_cafe_total),  # 4: cafe_session
-        (not is_night) and (not is_at_apartment),  # 5: wait_at_department
-        (
-            can_reach_apartment
-            and (not is_mood_burned_out)
-            and finance.can_afford(cheapest_bundle_price + grocery_commute_cost)
-        ),  # 6: grocery_shop
-        is_night and (not is_mood_burned_out) and (not is_stress_burned_out),  # 7: night_cramming
-    ]
+        _, cheapest_path = world_graph.choose_nearest_target_node(
+            source_node_id=current_node_id,
+            candidate_node_ids=targets,
+            preference="cheapest",
+            climate=current_climate,
+            ojol_tariff=current_ojol_tariff,
+            is_raining=is_raining,
+        )
+        can_reach = cheapest_path is not None and (
+            is_night or finance.can_afford(cheapest_path.min_fare_idr)
+        )
+        travel_min_fare = cheapest_path.min_fare_idr if cheapest_path is not None else float("inf")
 
-    # 2. Route mask (2: direct_ojol, transit_ccws_ojol)
-    can_direct = finance.can_afford(min_direct_fare)
-    can_transit = finance.can_afford(min_transit_fare)
-    route_mask = [can_direct, can_transit]
-    if not any(route_mask):
-        route_mask = [False, True]
+        if handler == "rest":
+            allowed = can_reach
+        elif handler == "attend_schedule":
+            allowed = is_class_now and (not is_night) and (not is_mood_burned_out) and can_reach
+        elif handler == "study":
+            target_ok = any(
+                biometrics.academic_stress <= float(world_graph.get_node(nid).study_profile.max_stress_gate)
+                for nid in targets
+            )
+            allowed = (not is_mood_burned_out) and (not is_stress_burned_out) and target_ok and can_reach
+        elif handler == "hub_stay":
+            allowed = (not is_night) and can_reach
+        elif handler == "leisure_reset":
+            min_leisure = min(
+                (float(world_graph.get_node(nid).leisure_spend_idr[0]) for nid in targets if world_graph.get_node(nid).leisure_spend_idr),
+                default=0.0,
+            )
+            allowed = (not is_night) and can_reach and finance.can_afford(travel_min_fare + min_leisure)
+        elif handler == "wait":
+            allowed = (not is_night) and (current_node_id in targets)
+        elif handler == "grocery_shop":
+            allowed = (
+                (not is_mood_burned_out)
+                and can_reach
+                and finance.can_afford(travel_min_fare + cheapest_bundle_price)
+            )
+        elif handler == "night_cram":
+            allowed = is_night and (not is_mood_burned_out) and (not is_stress_burned_out) and can_reach
+        else:
+            allowed = can_reach
+
+        activity_mask.append(bool(allowed))
+
+    if not any(activity_mask):
+        activity_mask[0] = True
+
+    # 2. Route preference mask (fastest, cheapest)
+    route_mask = [True for _ in route_preferences]
 
     # 3. Cook combo mask (18)
     cook_combo_mask = [
@@ -668,7 +681,7 @@ def build_action_masks(
         for i in range(len(PantryManager.COOK_COMBOS))
     )
     if not has_any_cook_combo:
-        cook_combo_mask[0] = True  # dummy aman (cook_fresh & meal_prep sudah False)
+        cook_combo_mask[0] = True
 
     # 4. Meal mode mask (6)
     _, cook_fresh_min_energy = _get_cooking_energy_requirements(
@@ -677,32 +690,26 @@ def build_action_masks(
     _, meal_prep_min_energy = _get_cooking_energy_requirements(
         cooking_gates, "meal_prep", is_morning_step
     )
-    can_cook_location = is_at_apartment or is_night
+    can_cook_location = current_node.has_kitchen or is_night
     has_packed_lunch = pantry.get_packed_lunch_total_portions() >= 1
     has_meal_prep = pantry.get_meal_prep_total_portions() >= 1
 
-    can_reheat_home = (
-        can_cook_location
-        and (
-            has_packed_lunch
-            or (
-                has_meal_prep
-                and biometrics.energy >= float(cooking_gates["reheat_prep_min_energy"])
-                and biometrics.mood >= float(cooking_gates["reheat_prep_min_mood"])
-            )
+    can_reheat_home = can_cook_location and (
+        has_packed_lunch
+        or (
+            has_meal_prep
+            and biometrics.energy >= float(cooking_gates["reheat_prep_min_energy"])
+            and biometrics.mood >= float(cooking_gates["reheat_prep_min_mood"])
         )
     )
-    can_eat_bekal_campus = (not is_at_apartment and not is_night) and has_packed_lunch
+    can_eat_bekal_outside = (not can_cook_location) and has_packed_lunch
 
-    if is_at_apartment or is_night:
-        budget_meal_price = float(external_food["apartemen_warung"]["cost_idr"])
-        varied_meal_price = float(external_food["delivery_food"]["cost_idr"])
-    else:
-        budget_meal_price = float(external_food["warung_hemat"]["cost_idr"])
-        varied_meal_price = float(external_food["warung_variasi"]["cost_idr"])
+    food_node = world_graph.get_node(world_graph.home_node_id) if is_night else current_node
+    budget_food = select_food_for_node(food_node, "budget", external_foods)
+    varied_food = select_food_for_node(food_node, "varied", external_foods)
 
     meal_mode_mask = [
-        True,  # 0: skip
+        True,
         (
             can_eat
             and can_cook_location
@@ -710,23 +717,23 @@ def build_action_masks(
             and has_any_cook_combo
             and biometrics.energy >= cook_fresh_min_energy
             and biometrics.mood >= float(cooking_gates["cook_fresh_min_mood"])
-        ),  # 1: cook_fresh
+        ),
         (
             can_cook_location
             and (not is_stress_burned_out)
             and has_any_prep_combo
             and biometrics.energy >= meal_prep_min_energy
             and biometrics.mood >= float(cooking_gates["meal_prep_min_mood"])
-        ),  # 2: meal_prep
-        can_eat and (can_reheat_home or can_eat_bekal_campus),  # 3: reheat_or_eat_bekal
-        can_eat and finance.can_afford(budget_meal_price),  # 4: budget_external_meal
-        can_eat and finance.can_afford(varied_meal_price),  # 5: varied_external_meal
+        ),
+        can_eat and (can_reheat_home or can_eat_bekal_outside),
+        can_eat and (budget_food is not None) and finance.can_afford(float(budget_food.cost_idr)),
+        can_eat and (varied_food is not None) and finance.can_afford(float(varied_food.cost_idr)),
     ]
 
-    # 5. Bring bekal mask (2: [0, 1])
+    # 5. Bring bekal mask (2)
     max_packed = int(cooking_gates["max_packed_lunch_portions"])
     can_bring_bekal = (
-        is_at_apartment
+        current_node.has_kitchen
         and (not is_night)
         and has_meal_prep
         and pantry.get_packed_lunch_total_portions() < max_packed
@@ -736,12 +743,22 @@ def build_action_masks(
     bring_bekal_mask = [True, can_bring_bekal]
 
     # 6. Grocery bundle mask (15)
+    grocery_nodes = [n.id for n in world_graph.nodes.values() if n.has_grocery]
+    _, grocery_path = world_graph.choose_nearest_target_node(
+        source_node_id=current_node_id,
+        candidate_node_ids=grocery_nodes,
+        preference="cheapest",
+        climate=current_climate,
+        ojol_tariff=current_ojol_tariff,
+        is_raining=is_raining,
+    )
+    grocery_commute_cost = grocery_path.min_fare_idr if grocery_path is not None else float("inf")
     grocery_bundle_mask = [
         finance.can_afford(pantry.get_grocery_bundle_cost_idr(i) + grocery_commute_cost)
         for i in range(len(PantryManager.GROCERY_BUNDLES))
     ]
     if not any(grocery_bundle_mask):
-        grocery_bundle_mask[0] = True  # dummy aman (grocery_shop sudah False)
+        grocery_bundle_mask[0] = True
 
     return np.array(
         activity_mask

@@ -1,14 +1,12 @@
 class PantryManager:
     """
     Mengelola inventaris dapur berbasis Smart-FIFO (bahan mentah, meal prep kulkas,
-    serta kotak bekal yang dibawa ke kampus), valuasi stok dapur (IDR) untuk
-    budget potential shaping, racikan lauk mandiri, boredom, dan penuaan stok.
+    serta kotak bekal), valuasi stok dapur (IDR), racikan lauk mandiri,
+    kejenuhan menu berbasis window, dan penuaan stok.
     """
 
     INGREDIENT_NAMES = ("rice", "egg", "chicken", "tempe")
 
-    # 18 kombinasi racikan bebas yang valid & tidak redundant:
-    # (rice in {0, 1}, total lauk 0..2, minimal 1 unit total)
     COOK_COMBOS: tuple[tuple[int, int, int, int], ...] = (
         (1, 0, 0, 0),  # plain_rice
         (1, 1, 0, 0),  # rice + 1 egg
@@ -30,7 +28,6 @@ class PantryManager:
         (0, 0, 1, 1),  # 1 chicken + 1 tempe
     )
 
-    # 15 subset non-kosong belanja bahan (rice, egg, chicken, tempe)
     GROCERY_BUNDLES: tuple[tuple[int, int, int, int], ...] = tuple(
         (
             (mask >> 0) & 1,
@@ -41,12 +38,13 @@ class PantryManager:
         for mask in range(1, 16)
     )
 
-    def __init__(self, pantry_config: dict):
+    def __init__(self, pantry_config: dict, external_food_ids: tuple[str, ...] = ()):
         self.pantry_config = pantry_config
         self.ingredients_config = pantry_config["ingredients"]
         self.composition_rules = pantry_config["meal_composition_rules"]
         self.cooking_gates = pantry_config["cooking_costs_and_gates"]
         self.boredom_config = pantry_config["boredom_mechanics"]
+        self.external_food_ids = tuple(external_food_ids)
 
         self.unit_prices_idr: dict[str, float] = {
             name: float(self.ingredients_config[name]["pack_price_idr"])
@@ -100,9 +98,6 @@ class PantryManager:
                 "portion_value_idr": default_cost,
             })
 
-    # ------------------------------------------------------------------
-    # Utilitas Combo & Valuasi Stok
-    # ------------------------------------------------------------------
     @classmethod
     def decode_cook_combo(cls, combo_index: int) -> dict[str, int]:
         rice, egg, chicken, tempe = cls.COOK_COMBOS[int(combo_index)]
@@ -132,7 +127,6 @@ class PantryManager:
         )
 
     def get_inventory_value_idr(self) -> float:
-        """Total nilai rupiah bahan mentah + meal prep + bekal di dapur/tas."""
         raw_value = sum(
             self.get_ingredient_total_units(name) * self.unit_prices_idr[name]
             for name in self.INGREDIENT_NAMES
@@ -146,9 +140,6 @@ class PantryManager:
         )
         return float(raw_value + prep_value + bekal_value)
 
-    # ------------------------------------------------------------------
-    # Cek Stok & Daya Simpan
-    # ------------------------------------------------------------------
     def get_ingredient_total_units(self, ingredient_name: str) -> int:
         return sum(batch["quantity"] for batch in self.ingredient_batches[ingredient_name])
 
@@ -201,20 +192,28 @@ class PantryManager:
             for portion in self.packed_lunch_portions
         )
 
+    def get_last_meal_flag_names(self) -> list[str]:
+        return [
+            "last_meal_had_egg",
+            "last_meal_had_chicken",
+            "last_meal_had_tempe",
+            *[f"last_meal_was_{fid}" for fid in self.external_food_ids],
+            "last_meal_was_plain_rice",
+        ]
+
     def get_last_meal_one_hot_flags(self) -> list[float]:
-        """Mengembalikan 8 flag biner identitas menu terakhir agar observasi Markovian."""
+        """Mengembalikan flag biner identitas menu terakhir secara dinamis sesuai config."""
         signature = self.last_meal_signature or ""
         parts = set(signature.split("+")) if signature else set()
-        return [
+        flags = [
             1.0 if "egg" in parts else 0.0,
             1.0 if "chicken" in parts else 0.0,
             1.0 if "tempe" in parts else 0.0,
-            1.0 if signature == "apartemen_warung" else 0.0,
-            1.0 if signature == "delivery_food" else 0.0,
-            1.0 if signature == "warung_hemat" else 0.0,
-            1.0 if signature == "warung_variasi" else 0.0,
-            1.0 if signature == "plain_rice" else 0.0,
         ]
+        for food_id in self.external_food_ids:
+            flags.append(1.0 if signature == food_id else 0.0)
+        flags.append(1.0 if signature == "plain_rice" else 0.0)
+        return flags
 
     def max_portions_possible(self, requested_quantities: dict[str, int]) -> int:
         limits: list[int] = []
@@ -229,9 +228,6 @@ class PantryManager:
     ) -> bool:
         return self.max_portions_possible(requested_quantities) >= batch_multiplier
 
-    # ------------------------------------------------------------------
-    # Tambah, Konsumsi FIFO, Smart-FIFO Meal Prep, Bekal, & Penuaan Stok
-    # ------------------------------------------------------------------
     def add_grocery_pack(self, ingredient_name: str) -> None:
         ingredient_profile = self.ingredients_config[ingredient_name]
         self.ingredient_batches[ingredient_name].append({
@@ -285,10 +281,6 @@ class PantryManager:
     def pop_one_meal_prep_portion_smart_fifo(
         self, avoid_signature: str | None = None
     ) -> dict[str, float | str] | None:
-        """
-        Smart-FIFO: memprioritaskan batch tertua yang berbeda dari avoid_signature
-        agar variasi meal prep di kulkas tidak dipaksa memicu boredom.
-        """
         if not self.meal_prep_batches:
             return None
 
@@ -313,7 +305,6 @@ class PantryManager:
         return portion_profile
 
     def pack_one_bekal_from_prep(self) -> dict[str, float | str] | None:
-        """Memindahkan 1 porsi meal_prep dari kulkas ke kotak bekal di tas."""
         max_portions = int(self.cooking_gates["max_packed_lunch_portions"])
         if len(self.packed_lunch_portions) >= max_portions:
             return None
@@ -342,7 +333,6 @@ class PantryManager:
         return self.packed_lunch_portions.pop(selected_idx)
 
     def spoil_uneaten_packed_lunch_end_of_day(self) -> int:
-        """Bekal yang sudah dikeluarkan seharian dan tidak dimakan hingga akhir hari menjadi basi."""
         spoiled_bekal_count = len(self.packed_lunch_portions)
         if spoiled_bekal_count > 0:
             self.packed_lunch_portions = []
@@ -376,9 +366,6 @@ class PantryManager:
         self.total_spoiled_units += spoiled_units_this_step
         return spoiled_units_this_step
 
-    # ------------------------------------------------------------------
-    # Racikan Lauk Mandiri & Mekanik Kejenuhan (Boredom)
-    # ------------------------------------------------------------------
     def calculate_custom_meal_profile(
         self, ingredient_quantities: dict[str, int]
     ) -> tuple[float, float, float, str]:
